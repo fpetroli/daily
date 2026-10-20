@@ -1,0 +1,211 @@
+# Multi-turn conversations: the model receives the recent exchanges. Every `call` is what it
+# must produce by reading that text.
+
+- id: multiturn-01
+  turns:
+    - {say: "add yoga", call: {tool: add_event, title: yoga}, kind: insufficient_info}
+    - {say: "at 19:00 for 45 minutes", call: {tool: add_event, title: yoga, time: "19:00", duration_minutes: 45}, kind: event_created}
+  added: [[yoga, "{today}T19:00", "{today}T19:45"]]
+
+- id: multiturn-02
+  turns:
+    - {say: "add an event tomorrow at 10 for an hour", call: {tool: add_event, date: "{tomorrow}", time: "10:00", duration_minutes: 60}, kind: missing_field:title}
+    - {say: "meeting", call: {tool: add_event, title: meeting, date: "{tomorrow}", time: "10:00", duration_minutes: 60}, kind: event_created}
+  added: [[meeting, "{tomorrow}T10:00", "{tomorrow}T11:00"]]
+
+- id: multiturn-03
+  seed:
+    events:
+      - [call with Marco, "{today}T10:00", "{today}T10:30"]
+      - [call with the client, "{today}T15:00", "{today}T15:30"]
+  turns:
+    - {say: "move the call by 5 minutes", call: {tool: update_event, event_description: call, shift_minutes: 5}, kind: event_ambiguous}
+    - {say: "call with the client at 15:00", call: {tool: update_event, event_description: call with the client, event_time: "15:00", shift_minutes: 5}, kind: event_updated}
+  moved: [[[call with the client, "{today}T15:00", "{today}T15:30"], [call with the client, "{today}T15:05", "{today}T15:35"]]]
+
+- id: multiturn-04
+  seed:
+    events:
+      - [call with Marco, "{today}T10:00", "{today}T10:30"]
+      - [call with the client, "{today}T15:00", "{today}T15:30"]
+  turns:
+    - {say: "delete the call", call: {tool: remove_event, event_description: call}, kind: event_ambiguous}
+    - {say: "number two", call: {tool: remove_event, event_description: call with the client, event_time: "15:00"}, kind: event_removed}
+  removed: [[call with the client, "{today}T15:00", "{today}T15:30"]]
+
+- id: multiturn-05
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  turns:
+    - {say: "add gym at 6 pm for an hour", call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}, reply_has: ['Shall I also add "shower" from 19:00 to 19:15?']}
+    - {say: "yes", call: {tool: add_event, title: shower, time: "19:00", end_time: "19:15"}, kind: event_created}
+  added: [[gym, "{today}T18:00", "{today}T19:00"], [shower, "{today}T19:00", "{today}T19:15"]]
+
+- id: multiturn-06
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  turns:
+    - {say: "add gym at 6 pm for an hour", call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}}
+    - {say: "yes please", call: {tool: add_event, title: shower, time: "19:00", end_time: "19:15"}}
+  added: [[gym, "{today}T18:00", "{today}T19:00"], [shower, "{today}T19:00", "{today}T19:15"]]
+
+- id: multiturn-07
+  split: holdout
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  turns:
+    - {say: "add gym at 6 pm for an hour", call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}}
+    - {say: "yes but at 8 pm", call: {tool: add_event, title: shower, time: "20:00", end_time: "20:15"}}
+  added: [[gym, "{today}T18:00", "{today}T19:00"], [shower, "{today}T20:00", "{today}T20:15"]]
+
+- id: multiturn-08
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  turns:
+    - {say: "add gym at 6 pm for an hour", call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}}
+    - {say: "no thanks", call: {tool: none}, kind: no_action, reply_has: ["Ok."]}
+  added: [[gym, "{today}T18:00", "{today}T19:00"]]
+
+- id: multiturn-09
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - {title: shower, start: "{today}T19:00", end: "{today}T19:15", parent: gym}
+  turns:
+    - {say: "move the gym by half an hour", call: {tool: update_event, event_description: gym, shift_minutes: 30}, reply_has: ['Shall I also move "shower" from 19:30 to 19:45?']}
+    - {say: "yes", call: {tool: update_event, event_description: shower, new_time: "19:30", new_end_time: "19:45"}, kind: event_updated}
+  moved:
+    - [[gym, "{today}T18:00", "{today}T19:00"], [gym, "{today}T18:30", "{today}T19:30"]]
+    - [[shower, "{today}T19:00", "{today}T19:15"], [shower, "{today}T19:30", "{today}T19:45"]]
+
+- id: multiturn-10
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - {title: shower, start: "{today}T19:00", end: "{today}T19:15", parent: gym}
+  turns:
+    - {say: "delete the gym", call: {tool: remove_event, event_description: gym}, reply_has: ['Shall I also delete "shower" (19:00-19:15)?']}
+    - {say: "yes", call: {tool: remove_event, event_description: shower, event_time: "19:00"}, kind: event_removed}
+  removed: [[gym, "{today}T18:00", "{today}T19:00"], [shower, "{today}T19:00", "{today}T19:15"]]
+
+- id: multiturn-11
+  seed:
+    events: [[work, "{today}T09:00", "{today}T17:00"]]
+    rules: [[commute, work, before, null, 45], [dinner, work, before, 0]]
+    defaults: [[dinner, null, 60]]
+  turns:
+    - {say: "add dinner", call: {tool: add_event, title: dinner}, kind: needs_gap_confirmation}
+    - {say: "yes", call: {tool: add_event, title: dinner, with_gap: true}, kind: event_created}
+  added: [[dinner, "{today}T07:15", "{today}T08:15"]]
+
+- id: multiturn-12
+  seed:
+    events: [[work, "{today}T09:00", "{today}T17:00"]]
+    rules: [[commute, work, before, null, 45], [dinner, work, before, 0]]
+    defaults: [[dinner, null, 60]]
+  turns:
+    - {say: "add dinner", call: {tool: add_event, title: dinner}, kind: needs_gap_confirmation}
+    - {say: "no", call: {tool: add_event, title: dinner, with_gap: false}, kind: event_created}
+  added: [[dinner, "{today}T08:00", "{today}T09:00"]]
+
+- id: multiturn-13
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15], [gym, null, 60]]
+  turns:
+    - {say: "add the shower", call: {tool: add_event, title: shower}, kind: needs_anchor_confirmation}
+    - {say: "at 6 pm", call: {tool: add_event, title: shower, anchor_time: "18:00"}, kind: event_created}
+  added: [[shower, "{today}T19:00", "{today}T19:15"]]
+
+- id: multiturn-14
+  seed:
+    events: [[gym, "{today}T18:00", "{today}T19:00"]]
+    rules: [[shower, gym, after, 0]]
+  turns:
+    - {say: "add the shower", call: {tool: add_event, title: shower}, kind: needs_duration_confirmation}
+    - {say: "15 minutes", call: {tool: add_event, title: shower, duration_minutes: 15}, kind: event_created}
+  added: [[shower, "{today}T19:00", "{today}T19:15"]]
+
+- id: multiturn-15
+  turns:
+    - {say: "add yoga on tuesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{tue}", time: "19:00", duration_minutes: 45}}
+    - {say: "add yoga on wednesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{wed}", time: "19:00", duration_minutes: 45}}
+    - {say: "add yoga on thursday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 45}, reply_has: ['I noticed you often do "yoga" around 19:00 (45 minutes): shall I save it as a usual time?'], quick_replies: ["Yes", "No"]}
+    - {say: "yes", call: {tool: add_event_rule, trigger_title: yoga, typical_start: "19:00", typical_duration_minutes: 45}, kind: add_event_rule_success}
+  added: [[yoga, "{tue}T19:00", "{tue}T19:45"], [yoga, "{wed}T19:00", "{wed}T19:45"], [yoga, "{thu}T19:00", "{thu}T19:45"]]
+  defaults: {yoga: ["19:00", 45]}
+  confirmed_patterns: 1
+
+- id: multiturn-16
+  turns:
+    - {say: "add yoga on tuesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{tue}", time: "19:00", duration_minutes: 45}}
+    - {say: "add yoga on wednesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{wed}", time: "19:00", duration_minutes: 45}}
+    - {say: "add yoga on thursday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 45}}
+    - {say: "no", call: {tool: dismiss_habit}, kind: habit_dismissed, reply_has: ["Ok, I won't suggest it again."]}
+  added: [[yoga, "{tue}T19:00", "{tue}T19:45"], [yoga, "{wed}T19:00", "{wed}T19:45"], [yoga, "{thu}T19:00", "{thu}T19:45"]]
+  rejected_patterns: 1
+
+- id: multiturn-17
+  seed: {events: [[dentist, "{tomorrow}T15:00", "{tomorrow}T16:00"]]}
+  turns:
+    - {say: "add yoga", call: {tool: add_event, title: yoga}, kind: insufficient_info}
+    - {say: "what do I have tomorrow?", call: {tool: get_schedule, date: "{tomorrow}"}, kind: schedule_view}
+
+- id: multiturn-18
+  split: holdout
+  turns:
+    - {say: "yes", call: {tool: none}, kind: no_action}
+    - {say: "no", call: {tool: none}, kind: no_action}
+
+- id: multiturn-19
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  turns:
+    - {say: "add the shower", call: {tool: add_event, title: shower}, kind: needs_anchor_confirmation}
+    - {say: "at 6 pm", call: {tool: add_event, title: shower, anchor_time: "18:00"}, kind: needs_anchor_duration, reply_has: ['I don''t know how long "gym" lasts']}
+
+- id: multiturn-20
+  turns:
+    - {say: "the shower always goes near the gym", call: {tool: add_event_rule, trigger_title: shower, related_title: gym}, kind: add_event_rule_needs_position, quick_replies: ["Before", "After"]}
+    - {say: "after", call: {tool: add_event_rule, trigger_title: shower, related_title: gym, position: after}, kind: add_event_rule_success}
+  rules_added: [[shower, gym]]
+
+- id: multiturn-21
+  seed: {events: [[gym, "{today}T17:00", "{today}T18:00"]]}
+  turns:
+    - {say: "add shower after the gym", call: {tool: add_event_relative, title: shower, anchor_description: gym, position: after}, kind: missing_field:duration_minutes}
+    - {say: "20 minutes", call: {tool: add_event_relative, title: shower, anchor_description: gym, position: after, duration_minutes: 20}, kind: event_created}
+  added: [[shower, "{today}T18:00", "{today}T18:20"]]
+
+- id: multiturn-22
+  seed: {events: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]}
+  turns:
+    - {say: "delete the gym", call: {tool: remove_event, event_description: gym}, kind: event_not_found}
+    - {say: "I mean tomorrow's", call: {tool: remove_event, event_description: gym, event_date: "{tomorrow}"}, kind: event_removed}
+  removed: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+
+- id: multiturn-23
+  turns:
+    - {say: "add meeting from 6 pm to 5 pm", call: {tool: add_event, title: meeting, time: "18:00", end_time: "17:00"}, kind: invalid_range}
+    - {say: "I meant from 5 to 6 pm", call: {tool: add_event, title: meeting, time: "17:00", end_time: "18:00"}, kind: event_created}
+  added: [[meeting, "{today}T17:00", "{today}T18:00"]]
+
+- id: multiturn-24
+  seed: {events: [[lunch, "{today}T13:00", "{today}T14:00"]]}
+  turns:
+    - {say: "move lunch", call: {tool: update_event, event_description: lunch}, kind: missing_field:change}
+    - {say: "to 2 pm", call: {tool: update_event, event_description: lunch, new_time: "14:00"}, kind: event_updated}
+  moved: [[[lunch, "{today}T13:00", "{today}T14:00"], [lunch, "{today}T14:00", "{today}T15:00"]]]
+
+- id: multiturn-25
+  split: holdout
+  turns:
+    - {say: "add an event", call: {tool: add_event}, kind: missing_field:title}
+    - {say: "dentist", call: {tool: add_event, title: dentist}, kind: insufficient_info}
+    - {say: "tomorrow at 10 for an hour", call: {tool: add_event, title: dentist, date: "{tomorrow}", time: "10:00", duration_minutes: 60}, kind: event_created}
+  added: [[dentist, "{tomorrow}T10:00", "{tomorrow}T11:00"]]

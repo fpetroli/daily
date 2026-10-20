@@ -1,0 +1,39 @@
+[Unit]
+Description=daily - scheduling assistant on Telegram
+Documentation=https://github.com/fpetroli/daily
+After=network-online.target daily-llm.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=daily
+Group=daily
+EnvironmentFile=/etc/daily/daily.env
+# The bot polls Telegram and calls the local model: it opens no port.
+ExecStart=/opt/daily/venv/bin/python -m daily
+Restart=on-failure
+RestartSec=10
+
+# Domain data: /var/lib/daily, created by the service and visible only to it.
+StateDirectory=daily
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/daily
+
+# Isolation: the service reads its own code and writes only to its data folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

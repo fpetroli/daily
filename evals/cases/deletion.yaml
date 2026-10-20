@@ -1,0 +1,82 @@
+# Deleting events.
+
+- id: deletion-01
+  say: "delete the team meeting"
+  seed: {events: [[team meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: remove_event, event_description: team meeting}
+  removed: [[team meeting, "{today}T16:00", "{today}T17:00"]]
+  kind: event_removed
+
+- id: deletion-02
+  say: "remove dentist"
+  seed: {events: [[dentist, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: remove_event, event_description: dentist}
+  removed: [[dentist, "{today}T16:00", "{today}T17:00"]]
+
+- id: deletion-03
+  say: "take off the 4 pm break"
+  seed:
+    events:
+      - [lunch, "{today}T13:00", "{today}T14:00"]
+      - [break, "{today}T16:00", "{today}T16:15"]
+  call: {tool: remove_event, event_description: break, event_time: "16:00"}
+  removed: [[break, "{today}T16:00", "{today}T16:15"]]
+
+- id: deletion-04
+  say: "drop the 6 pm event"
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - [dinner, "{today}T20:00", "{today}T21:00"]
+  call: {tool: remove_event, event_time: "18:00"}
+  removed: [[gym, "{today}T18:00", "{today}T19:00"]]
+
+- id: deletion-05
+  say: "delete tomorrow's gym"
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - [gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]
+  call: {tool: remove_event, event_description: gym, event_date: "{tomorrow}"}
+  removed: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+
+- id: deletion-06
+  say: "delete the call"
+  seed:
+    events:
+      - [call with Marco, "{today}T10:00", "{today}T10:30"]
+      - [call with the client, "{today}T15:00", "{today}T15:30"]
+  call: {tool: remove_event, event_description: call}
+  kind: event_ambiguous
+  quick_replies: ["call with Marco at 10:00", "call with the client at 15:00"]
+
+- id: deletion-07
+  say: "delete the dentist"
+  split: holdout
+  call: {tool: remove_event, event_description: dentist}
+  kind: event_not_found
+
+- id: deletion-08
+  say: "delete the gym"
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - {title: shower, start: "{today}T19:00", end: "{today}T19:15", parent: gym}
+  call: {tool: remove_event, event_description: gym}
+  removed: [[gym, "{today}T18:00", "{today}T19:00"]]
+  reply_has: ['Shall I also delete "shower" (19:00-19:15)?']
+  quick_replies: ["Yes", "No"]
+
+- id: deletion-09
+  say: "delete the event"
+  seed: {events: [[gym, "{today}T18:00", "{today}T19:00"]]}
+  call: {tool: remove_event}
+  kind: missing_field:event_description
+  reply_has: ["Which event do you mean?"]
+
+- id: deletion-10
+  say: "take the meeting off"
+  split: holdout
+  seed: {events: [[meeting, "{tomorrow}T16:00", "{tomorrow}T17:00"]]}
+  call: {tool: remove_event, event_description: meeting}
+  kind: event_not_found

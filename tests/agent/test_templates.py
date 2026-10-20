@@ -1,0 +1,740 @@
+from datetime import date
+
+import pytest
+
+from daily.agent.parser import ParseFailure
+from daily.agent.prompts import INSTRUCTIONS
+from daily.agent.results import (
+    Executed,
+    ExecutionError,
+    FreeSlotsView,
+    HabitDismissed,
+    MissingField,
+    NoAction,
+    ParseFailed,
+    ScheduleView,
+)
+from daily.agent.schemas import parse_tool_call
+from daily.agent.templates import Reply, day_label, render, rules_text, undone_text
+from daily.domain.models import EventDefault, EventRule
+from daily.domain.timeband import TimeBand
+from daily.services.habits import (
+    EventPatternProposal,
+    GapPatternProposal,
+    SequencePatternProposal,
+)
+from daily.services.placement import (
+    AnchorDurationMissing,
+    AnchorGapConfirmationNeeded,
+    AnchorMissing,
+    AnchorNeedsDuration,
+)
+from daily.services.relative import AnchorAmbiguous, AnchorNotFound
+from daily.services.rules import (
+    AddEventRuleInvalidFormat,
+    AddEventRuleNeedsInfo,
+    AddEventRuleNeedsPosition,
+    AddEventRuleSuccess,
+    RemoveEventRuleAmbiguous,
+    RemoveEventRuleNotFound,
+    RemoveEventRuleSuccess,
+)
+from daily.services.schedule import (
+    EventAmbiguous,
+    EventCreated,
+    EventNotFound,
+    EventRemoved,
+    EventUpdated,
+    InsufficientInfo,
+    InvalidRange,
+    NeedsAnchorConfirmation,
+    NeedsAnchorDuration,
+    NeedsDurationConfirmation,
+    NeedsGapConfirmation,
+)
+from daily.services.types import (
+    CheckOverlapResult,
+    EventInfo,
+    FreeSlot,
+    RuleCandidateInfo,
+    RuleProposal,
+    ScheduleEntry,
+)
+from daily.services.undo import Undone
+
+from .conftest import NOW, TODAY, TOMORROW
+
+YES_NO = ("Yes", "No")
+
+
+def call(**payload):
+    return parse_tool_call(payload)
+
+
+def show(payload: dict, outcome, habit=None) -> Reply:
+    return render(Executed(call(**payload), outcome, habit), NOW)
+
+
+def info(title, start, end, event_id="e"):
+    return EventInfo(event_id, title, f"{TODAY}T{start}", f"{TODAY}T{end}")
+
+
+# --- days ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [
+        ("2026-09-21", "today"),
+        ("2026-09-22", "tomorrow"),
+        ("2026-09-23", "the day after tomorrow"),
+        ("2026-09-20", "yesterday"),
+        ("2026-09-26", "Saturday, September 26"),
+        ("2026-12-01", "Tuesday, December 1"),
+        ("2027-01-04", "Monday, January 4, 2027"),
+    ],
+)
+def test_day_labels(day, expected):
+    assert day_label(day, date(2026, 9, 21)) == expected
+
+
+# --- creation --------------------------------------------------------------------------
+
+
+def created(title="gym", start="18:00", end="19:00", **extra):
+    return EventCreated("e1", title, f"{TOMORROW}T{start}", f"{TOMORROW}T{end}", **extra)
+
+
+def test_creation_is_self_contained_title_day_and_times():
+    reply = show({"tool": "add_event"}, created())
+
+    assert reply == Reply("Done: gym tomorrow from 18:00 to 19:00.")
+
+
+def test_creation_reports_conflicts_with_title_and_time():
+    conflicts = (info("meeting", "10:00", "11:00"),)
+
+    reply = show({"tool": "add_event"}, created(conflicts=conflicts))
+
+    assert "Warning: it overlaps with meeting (10:00-11:00)." in reply.text
+    assert not reply.expects_reply
+
+
+def test_creation_with_downstream_proposal_asks_confirmation_with_full_times():
+    proposals = (RuleProposal("shower", f"{TOMORROW}T19:00", f"{TOMORROW}T19:15"),)
+
+    reply = show({"tool": "add_event"}, created(rule_proposals=proposals))
+
+    assert reply.text.endswith('Shall I also add "shower" from 19:00 to 19:15?')
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+def test_creation_at_24_writes_24_00():
+    reply = show(
+        {"tool": "add_event"},
+        EventCreated("e", "party", f"{TODAY}T23:00", "2026-09-22T00:00"),
+    )
+
+    assert "from 23:00 to 24:00" in reply.text
+
+
+# --- questions on missing data ---------------------------------------------------------
+
+
+def test_missing_time_and_missing_duration_quote_the_title():
+    ask_start = show({"tool": "add_event", "title": "yoga"}, InsufficientInfo("start"))
+    ask_duration = show({"tool": "add_event", "title": "yoga"}, InsufficientInfo("duration"))
+
+    assert ask_start == Reply('What time do you want "yoga"?', expects_reply=True)
+    assert ask_duration == Reply('How long does "yoga" last?', expects_reply=True)
+
+
+def test_invalid_range_asks_to_correct():
+    reply = show({"tool": "add_event"}, InvalidRange())
+
+    assert "the end must come after the start" in reply.text
+    assert reply.expects_reply
+
+
+def test_missing_anchor_asks_the_time_and_quotes_the_suggestion():
+    missing = AnchorMissing("shower", "gym", suggested_related_start="18:00")
+
+    reply = show({"tool": "add_event", "title": "shower"}, NeedsAnchorConfirmation(missing))
+
+    assert reply.text == (
+        'I can\'t find "gym" in the schedule today: what time is it, so I can place "shower" '
+        "accordingly? (it is usually at 18:00)"
+    )
+    assert reply.expects_reply and reply.quick_replies == ()
+
+
+def test_missing_anchor_without_suggestion_and_for_the_requested_day():
+    missing = AnchorMissing("shower", "gym")
+
+    reply = show(
+        {"tool": "add_event", "title": "shower", "date": TOMORROW}, NeedsAnchorConfirmation(missing)
+    )
+
+    assert "in the schedule tomorrow" in reply.text and "(it is usually" not in reply.text
+
+
+def test_missing_duration():
+    reply = show(
+        {"tool": "add_event", "title": "breakfast"},
+        NeedsDurationConfirmation(AnchorDurationMissing("breakfast")),
+    )
+
+    assert reply == Reply('How long does "breakfast" usually last?', expects_reply=True)
+
+
+def test_missing_anchor_duration_explains_what_to_do():
+    reply = show(
+        {"tool": "add_event", "title": "shower", "anchor_time": "18:00"},
+        NeedsAnchorDuration(AnchorNeedsDuration("shower", "gym")),
+    )
+
+    assert 'I don\'t know how long "gym" lasts' in reply.text
+    assert '"gym from 18 to 19"' in reply.text
+
+
+def gap_confirmation(position="after"):
+    rule = EventRule("r", "commute", "gym", position, None, 20)
+    return AnchorGapConfirmationNeeded(
+        trigger_title="shower",
+        anchor_title="gym",
+        anchor_boundary=f"{TOMORROW}T19:00",
+        start_with_gap=f"{TOMORROW}T19:20",
+        end_with_gap=f"{TOMORROW}T19:35",
+        start_without_gap=f"{TOMORROW}T19:00",
+        end_without_gap=f"{TOMORROW}T19:15",
+        gaps=(rule,),
+    )
+
+
+def test_usual_gap_is_a_yes_no_question_with_both_times():
+    reply = show({"tool": "add_event", "title": "shower"}, NeedsGapConfirmation(gap_confirmation()))
+
+    assert reply.text == (
+        'After "gym" there is usually a 20-minute gap: "shower" would be tomorrow at 19:20 '
+        "with the gap, at 19:00 without it. Shall I keep the gap?"
+    )
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+def test_usual_gap_before_the_anchor():
+    reply = show(
+        {"tool": "add_event", "title": "shower"},
+        NeedsGapConfirmation(gap_confirmation("before")),
+    )
+
+    assert reply.text.startswith('Before "gym" there is usually a')
+
+
+# --- finding an event ------------------------------------------------------------------
+
+
+def test_event_not_found_quotes_description_and_day():
+    today = show({"tool": "remove_event", "event_description": "dentist"}, EventNotFound())
+    other = show(
+        {"tool": "update_event", "event_description": "dentist", "event_date": TOMORROW},
+        EventNotFound(),
+    )
+
+    assert today == Reply(
+        'I can\'t find any event "dentist" in the schedule today.', expects_reply=True
+    )
+    assert other.text == 'I can\'t find any event "dentist" in the schedule tomorrow.'
+
+
+def test_same_name_events_are_numbered_with_time_and_each_is_a_quick_reply():
+    candidates = (
+        info("call with Marco", "10:00", "10:30", "a"),
+        info("call with the client", "15:00", "15:30", "b"),
+    )
+
+    reply = show({"tool": "remove_event", "event_description": "call"}, EventAmbiguous(candidates))
+
+    assert reply.text == (
+        "I found several events today: 1) call with Marco (10:00-10:30), 2) call with the "
+        "client (15:00-15:30). Which one do you mean?"
+    )
+    assert reply.quick_replies == ("call with Marco at 10:00", "call with the client at 15:00")
+    assert reply.expects_reply
+
+
+def test_relative_anchor_not_found_and_ambiguous():
+    payload = {"tool": "add_event_relative", "title": "shower", "anchor_description": "gym"}
+
+    not_found = show(payload, AnchorNotFound())
+    ambiguous = show(
+        payload,
+        AnchorAmbiguous((info("gym", "07:00", "08:00"), info("gym", "18:00", "19:00"))),
+    )
+
+    assert not_found.text == 'I can\'t find any event "gym" in the schedule today.'
+    assert ambiguous.quick_replies == ("gym at 07:00", "gym at 18:00")
+
+
+# --- change and deletion ---------------------------------------------------------------
+
+
+def updated(**kwargs):
+    base = {
+        "event_id": "e1",
+        "title": "gym",
+        "start": f"{TODAY}T18:30",
+        "end": f"{TODAY}T19:30",
+        "original_start": f"{TODAY}T18:00",
+        "original_end": f"{TODAY}T19:00",
+        "original_title": "gym",
+    }
+    return EventUpdated(**{**base, **kwargs})
+
+
+def test_move_says_where_it_ended_up():
+    reply = show({"tool": "update_event"}, updated())
+
+    assert reply == Reply('Done: I moved "gym" to today from 18:30 to 19:30.')
+
+
+def test_title_only_change():
+    reply = show(
+        {"tool": "update_event"},
+        updated(title="intense gym", start=f"{TODAY}T18:00", end=f"{TODAY}T19:00"),
+    )
+
+    assert reply.text == 'Done: "gym" is now called "intense gym".'
+
+
+def test_move_reports_conflicts():
+    reply = show({"tool": "update_event"}, updated(conflicts=(info("lunch", "19:00", "20:00"),)))
+
+    assert "Warning: it overlaps with lunch (19:00-20:00)." in reply.text
+
+
+def test_move_proposes_moving_the_derived_event_by_the_same_interval():
+    outcome = updated(cascade_candidates=(info("shower", "19:00", "19:15"),))
+
+    reply = show({"tool": "update_event"}, outcome)
+
+    assert reply.text.endswith('Shall I also move "shower" from 19:30 to 19:45?')
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+def test_move_backwards_moves_the_derived_event_backwards():
+    outcome = updated(
+        start=f"{TODAY}T17:00",
+        end=f"{TODAY}T18:00",
+        cascade_candidates=(info("shower", "19:00", "19:15"),),
+    )
+
+    assert (
+        'Shall I also move "shower" from 18:00 to 18:15?'
+        in show({"tool": "update_event"}, outcome).text
+    )
+
+
+def test_deletion_says_what_was_deleted():
+    reply = show(
+        {"tool": "remove_event"},
+        EventRemoved("e1", "gym", f"{TODAY}T18:00", f"{TODAY}T19:00"),
+    )
+
+    assert reply == Reply('Done: I deleted "gym" (today 18:00-19:00).')
+
+
+def test_deletion_proposes_deleting_the_derived_event():
+    outcome = EventRemoved(
+        "e1",
+        "gym",
+        f"{TODAY}T18:00",
+        f"{TODAY}T19:00",
+        cascade_candidates=(info("shower", "19:00", "19:15"),),
+    )
+
+    reply = show({"tool": "remove_event"}, outcome)
+
+    assert reply.text.endswith('Shall I also delete "shower" (19:00-19:15)?')
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+def test_overlap():
+    payload = {"tool": "check_overlap", "time": "16:30", "end_time": "17:30"}
+    busy = show(payload, CheckOverlapResult(True, (info("meeting", "16:00", "17:00"),)))
+    free = show(payload, CheckOverlapResult(False, ()))
+
+    assert busy.text == "Yes: today from 16:30 to 17:30 overlaps with meeting (16:00-17:00)."
+    assert free.text == "No: today from 16:30 to 17:30 you are free."
+
+
+# --- reads -----------------------------------------------------------------------------
+
+
+def entry(title, start, end, done=False):
+    return ScheduleEntry("e", title, f"{TODAY}T{start}", f"{TODAY}T{end}", done)
+
+
+def schedule(entries, day=TODAY, band=None):
+    return show({"tool": "get_schedule"}, ScheduleView(day, band, tuple(entries))).text
+
+
+def test_empty_schedule():
+    assert schedule([]) == "Today you have nothing planned."
+    assert schedule([], TOMORROW, TimeBand.EVENING) == (
+        "Tomorrow in the evening you have nothing planned."
+    )
+
+
+def test_schedule_with_events_to_do():
+    text = schedule([entry("dinner", "20:00", "21:00"), entry("film", "21:30", "23:00")])
+
+    assert text == "Today you have: dinner at 20:00, film at 21:30."
+
+
+def test_schedule_tells_what_is_already_done():
+    text = schedule(
+        [entry("breakfast", "08:00", "08:30", done=True), entry("dinner", "20:00", "21:00")]
+    )
+
+    assert text == (
+        "Today you have already done: breakfast at 08:00. Still to do: dinner at 20:00."
+    )
+
+
+def test_schedule_all_done():
+    text = schedule([entry("breakfast", "08:00", "08:30", done=True)])
+
+    assert text == "Today you have already done everything: breakfast at 08:00."
+
+
+def test_schedule_of_another_day_with_band():
+    text = schedule([entry("meeting", "15:00", "16:00")], "2026-09-24", TimeBand.AFTERNOON)
+
+    assert text == "Thursday, September 24 in the afternoon you have: meeting at 15:00."
+
+
+def slots(items, band=None, minimum=None, day=TODAY):
+    view = FreeSlotsView(day, band, minimum, tuple(FreeSlot(*item) for item in items))
+    return show({"tool": "get_free_slots"}, view).text
+
+
+def test_free_slots():
+    assert slots([(f"{TODAY}T16:00", f"{TODAY}T18:00")]) == "Today you are free: 16:00-18:00."
+    assert slots([(f"{TODAY}T20:00", "2026-09-22T00:00")]) == "Today you are free: 20:00-24:00."
+
+
+def test_no_free_slot_quotes_the_minimum_duration():
+    assert slots([], TimeBand.EVENING, 90) == (
+        "Today in the evening I found no free slots of at least 90 minutes."
+    )
+    assert slots([]) == "Today I found no free slots."
+
+
+# --- rules -----------------------------------------------------------------------------
+
+
+def rule_added(**payload):
+    return show({"tool": "add_event_rule", **payload}, AddEventRuleSuccess()).text
+
+
+def test_relational_rule_gap_and_usual_time():
+    assert (
+        rule_added(trigger_title="shower", related_title="gym", position="after", offset_minutes=0)
+        == 'Done: "shower" always goes after "gym", right after.'
+    )
+    assert (
+        rule_added(
+            trigger_title="breakfast", related_title="work", position="before", offset_minutes=30
+        )
+        == 'Done: "breakfast" always goes before "work", 30 minutes before.'
+    )
+    assert (
+        rule_added(trigger_title="break", related_title="work", position="after", gap_minutes=30)
+        == 'Done: after "work" I will always leave a 30-minute gap.'
+    )
+    assert (
+        rule_added(trigger_title="meeting", typical_start="09:00", typical_duration_minutes=30)
+        == 'Done: "meeting" usually is at 09:00 and lasts 30 minutes.'
+    )
+    assert rule_added(trigger_title="meeting", typical_duration_minutes=30) == (
+        'Done: "meeting" usually lasts 30 minutes.'
+    )
+
+
+def test_rule_removed():
+    def removed(**payload):
+        return show({"tool": "remove_event_rule", **payload}, RemoveEventRuleSuccess()).text
+
+    assert removed(trigger_title="shower", related_title="gym") == (
+        'Done: I removed the rule of "shower" relative to "gym".'
+    )
+    assert removed(trigger_title="meeting") == (
+        'Done: I removed the usual time and duration of "meeting".'
+    )
+    assert removed(trigger_title="meeting", field="typical_start") == (
+        'Done: I removed the usual time of "meeting".'
+    )
+
+
+def test_rule_without_position_asks_before_or_after():
+    reply = show({"tool": "add_event_rule"}, AddEventRuleNeedsPosition("shower", "gym"))
+
+    assert reply == Reply('Does "shower" go before or after "gym"?', ("Before", "After"), True)
+
+
+def test_other_questions_about_rules():
+    payload = {"tool": "add_event_rule"}
+
+    assert "HH:MM" in show(payload, AddEventRuleInvalidFormat()).text
+    assert show(payload, AddEventRuleNeedsInfo("meeting")).text.startswith(
+        'What do you want me to remember for "meeting"'
+    )
+    assert show({"tool": "remove_event_rule"}, RemoveEventRuleNotFound()).text == (
+        "I can't find any matching rule."
+    )
+
+
+def test_ambiguous_rules_are_quick_replies():
+    candidates = (
+        RuleCandidateInfo("r1", "shower", "gym"),
+        RuleCandidateInfo("r2", "shower", "swimming"),
+    )
+
+    reply = show({"tool": "remove_event_rule"}, RemoveEventRuleAmbiguous(candidates))
+
+    assert reply.text == (
+        "I found several rules: 1) shower relative to gym, 2) shower relative to swimming. "
+        "Which one do you mean?"
+    )
+    assert reply.quick_replies == ("shower relative to gym", "shower relative to swimming")
+
+
+# --- habits ----------------------------------------------------------------------------
+
+
+def test_usual_time_proposal():
+    proposal = EventPatternProposal("n", "gym", "18:00", 60)
+
+    reply = show({"tool": "add_event"}, created(), proposal)
+
+    assert reply.text == (
+        'Done: gym tomorrow from 18:00 to 19:00. I noticed you often do "gym" around 18:00 '
+        "(60 minutes): shall I save it as a usual time?"
+    )
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+def test_sequence_rule_proposal():
+    after_gap = SequencePatternProposal("n", "shower", "gym", "after", 10)
+    right_after = SequencePatternProposal("n", "shower", "gym", "after", 0)
+
+    assert (
+        '"shower" 10 minutes after "gym": shall I save it as a rule?'
+        in show({"tool": "add_event"}, created(), after_gap).text
+    )
+    assert '"shower" right after "gym"' in show({"tool": "add_event"}, created(), right_after).text
+
+
+def test_recurring_gap_proposal_asks_the_name_in_a_single_reply():
+    proposal = GapPatternProposal("n", "work", "after", 30)
+
+    reply = show({"tool": "add_event"}, created(), proposal)
+
+    assert reply.text.endswith(
+        'You often leave about 30 minutes free after "work". If you want to save it as a rule, '
+        'tell me what to call it (for example "break").'
+    )
+    assert (reply.quick_replies, reply.expects_reply) == (("No",), True)
+
+
+def test_rejection_of_a_suggestion():
+    yes = show(
+        {"tool": "dismiss_habit"}, HabitDismissed(EventPatternProposal("n", "p", "18:00", 60))
+    )
+    nothing = show({"tool": "dismiss_habit"}, HabitDismissed(None))
+
+    assert yes.text == "Ok, I won't suggest it again."
+    assert nothing.text == "There was no suggestion to reject."
+
+
+def test_after_a_rejection_the_next_suggestion_is_appended():
+    reply = show(
+        {"tool": "dismiss_habit"},
+        HabitDismissed(EventPatternProposal("n", "p", "18:00", 60)),
+        SequencePatternProposal("m", "shower", "gym", "after", 0),
+    )
+
+    assert reply.text.startswith('Ok, I won\'t suggest it again. You often add "shower"')
+    assert reply.expects_reply
+
+
+# --- missing data and errors -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "subject", "expected"),
+    [
+        ("title", None, "What is the event called?"),
+        ("event_description", None, "Which event do you mean?"),
+        ("trigger_title", None, "Which event is it about?"),
+        ("trigger_title", "gap", "What do you want to call this free slot?"),
+        ("time", None, "At what time?"),
+        ("end_time", None, "Until what time?"),
+        ("anchor_description", "shower", 'Relative to which event do you want to place "shower"?'),
+        ("duration_minutes", "shower", 'How long does "shower" last?'),
+        (
+            "change",
+            "meeting",
+            'What do you want to change about "meeting": the time, the duration or the name?',
+        ),
+        ("something", None, "Can you give me more details?"),
+    ],
+)
+def test_questions_on_missing_data(field, subject, expected):
+    reply = render(MissingField(call(tool="none"), field, subject), NOW)
+
+    assert reply == Reply(expected, expects_reply=True)
+
+
+def test_missing_position_has_quick_replies():
+    reply = render(MissingField(call(tool="add_event_relative"), "position", "shower"), NOW)
+
+    assert reply == Reply('Does "shower" go before or after?', ("Before", "After"), True)
+
+
+def test_no_action_and_errors_are_fixed_messages_without_question():
+    assert "I can add, move or delete events" in render(NoAction(), NOW).text
+    assert render(ParseFailed(ParseFailure("invalid_output")), NOW) == Reply(
+        "I didn't understand, can you rephrase?"
+    )
+    for kind in ("unavailable", "timeout", "error"):
+        assert render(ParseFailed(ParseFailure(kind)), NOW) == Reply(
+            "The model is not answering: try again shortly."
+        )
+    assert render(ExecutionError(), NOW) == Reply("Something went wrong: try again.")
+    for reply in (render(NoAction(), NOW), render(ExecutionError(), NOW)):
+        assert not reply.expects_reply and reply.quick_replies == ()
+
+
+def test_unknown_outcome_or_broken_template_give_a_generic_message():
+    assert render(object(), NOW) == Reply("Done.")
+    assert render(Executed(call(tool="none"), object()), NOW) == Reply("Done.")
+    # outcome and tool call inconsistent: the template raises, the message stays generic
+    broken = Executed(call(tool="none"), CheckOverlapResult(True, ()))
+    assert render(broken, NOW) == Reply("Done.")
+
+
+# --- the prompt and the templates say the same things ------------------------------------
+
+
+def test_phrases_the_prompt_teaches_to_recognize_are_the_template_ones():
+    texts = " ".join(
+        [
+            show(
+                {"tool": "add_event"},
+                created(
+                    rule_proposals=(
+                        RuleProposal("shower", f"{TOMORROW}T19:00", f"{TOMORROW}T19:15"),
+                    )
+                ),
+            ).text,
+            show(
+                {"tool": "update_event"},
+                updated(cascade_candidates=(info("shower", "19:00", "19:15"),)),
+            ).text,
+            show(
+                {"tool": "remove_event"},
+                EventRemoved(
+                    "e",
+                    "p",
+                    f"{TODAY}T18:00",
+                    f"{TODAY}T19:00",
+                    (info("shower", "19:00", "19:15"),),
+                ),
+            ).text,
+            show({"tool": "add_event"}, NeedsGapConfirmation(gap_confirmation())).text,
+            show(
+                {"tool": "add_event"},
+                NeedsAnchorConfirmation(AnchorMissing("shower", "gym")),
+            ).text,
+            show(
+                {"tool": "add_event"}, NeedsDurationConfirmation(AnchorDurationMissing("shower"))
+            ).text,
+            show(
+                {"tool": "remove_event", "event_description": "c"},
+                EventAmbiguous((info("c", "10:00", "11:00"), info("c", "12:00", "13:00"))),
+            ).text,
+        ]
+    )
+
+    for phrase in (
+        "Shall I also add",
+        "Shall I also move",
+        "Shall I also delete",
+        "Shall I keep the gap",
+        "what time is it",
+        "How long does",
+        "Which one do you mean?",
+    ):
+        assert phrase in texts, phrase
+        assert phrase in INSTRUCTIONS, phrase
+
+
+def test_event_not_found_by_time_quotes_the_time():
+    reply = show({"tool": "remove_event", "event_time": "18:00"}, EventNotFound())
+
+    assert reply.text == "I can't find any event at 18:00 in the schedule today."
+
+
+def test_a_no_after_a_question_is_a_plain_ok():
+    from daily.agent.results import NoAction
+
+    assert render(NoAction(after_question=True), NOW) == Reply("Ok.")
+    assert render(NoAction(), NOW).text.startswith("I didn't understand what to do")
+
+
+# --- rules and undo (the bot's commands) ----------------------------------------------
+
+
+def test_rules_text_without_rules_explains_how_to_teach_one():
+    assert rules_text([], []).startswith("There are no rules yet.")
+
+
+def test_rules_text_lists_relations_gaps_and_usual_times():
+    rules = [
+        EventRule("r1", "shower", "gym", "after"),
+        EventRule("r2", "stretching", "run", "before", offset_minutes=10),
+        EventRule("r3", "break", "lunch", "after", gap_minutes=30),
+    ]
+    defaults = [EventDefault("yoga", "19:00", 45), EventDefault("meeting", None, 60)]
+
+    assert rules_text(rules, defaults) == (
+        "Rules and usual times:\n"
+        '- "shower" right after "gym"\n'
+        '- "stretching" 10 minutes before "run"\n'
+        '- 30 minutes free after "lunch"\n'
+        '- "yoga" usually at 19:00 and lasts 45 minutes\n'
+        '- "meeting" usually lasts 60 minutes'
+    )
+
+
+@pytest.mark.parametrize(
+    ("undone", "expected"),
+    [
+        (None, "There is nothing to undo."),
+        (
+            Undone("add_event", "gym", f"{TOMORROW}T18:00", f"{TOMORROW}T19:00"),
+            'Undone: I deleted "gym" tomorrow from 18:00 to 19:00.',
+        ),
+        (
+            Undone("update_event", "gym", f"{TODAY}T18:00", f"{TODAY}T19:00"),
+            'Undone: "gym" is back today from 18:00 to 19:00.',
+        ),
+        (
+            Undone("remove_event", "gym", "2026-09-28T18:00", "2026-09-28T19:00"),
+            'Undone: "gym" is back on Monday, September 28 from 18:00 to 19:00.',
+        ),
+    ],
+)
+def test_undone_text(undone, expected):
+    assert undone_text(undone, NOW.date()) == expected

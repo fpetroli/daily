@@ -1,0 +1,87 @@
+# Schedule, free slots and overlaps: no writes.
+
+- id: reads-01
+  say: "show me today's day"
+  seed:
+    events:
+      - [breakfast, "{today}T08:00", "{today}T08:30"]
+      - [meeting, "{today}T16:00", "{today}T17:00"]
+      - [dinner, "{today}T20:00", "{today}T21:00"]
+  call: {tool: get_schedule}
+  kind: schedule_view
+  reply_has: ["Today you have already done: breakfast at 08:00. Still to do: meeting at 16:00, dinner at 20:00."]
+
+- id: reads-02
+  say: "plan tomorrow"
+  call: {tool: get_schedule, date: "{tomorrow}"}
+  reply_has: ["Tomorrow you have nothing planned."]
+
+- id: reads-03
+  say: "what do I have on thursday afternoon?"
+  seed:
+    events:
+      - [breakfast, "{thu}T08:00", "{thu}T08:30"]
+      - [meeting, "{thu}T15:00", "{thu}T16:00"]
+  call: {tool: get_schedule, date: "{thu}", time_band: afternoon}
+  reply_has: ["Thursday, September 24 in the afternoon you have: meeting at 15:00."]
+
+- id: reads-04
+  say: "what's my plan for September 25?"
+  split: holdout
+  call: {tool: get_schedule, date: "2026-09-25"}
+  reply_has: ["Friday, September 25 you have nothing planned."]
+
+- id: reads-05
+  say: "how much free time do I have in the afternoon?"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: get_free_slots, date: "{today}", time_band: afternoon}
+  kind: free_slots_view
+  reply_has: ["Today in the afternoon you are free: 15:30-16:00, 17:00-19:00."]
+
+- id: reads-06
+  say: "find me a free slot of at least an hour tomorrow"
+  call: {tool: get_free_slots, date: "{tomorrow}", min_duration_minutes: 60}
+  reply_has: ["Tomorrow you are free: 00:00-24:00."]
+
+- id: reads-07
+  say: "do I have half an hour free somewhere today?"
+  seed: {events: [[work, "{today}T09:00", "{today}T17:00"]]}
+  call: {tool: get_free_slots, date: "{today}", min_duration_minutes: 30}
+  reply_has: ["Today you are free: 17:00-24:00."]
+
+- id: reads-08
+  say: "am I free tomorrow evening?"
+  seed: {events: [[dinner, "{tomorrow}T20:00", "{tomorrow}T21:00"]]}
+  call: {tool: get_free_slots, date: "{tomorrow}", time_band: evening}
+  reply_has: ["Tomorrow in the evening you are free: 19:00-20:00, 21:00-23:00."]
+
+- id: reads-09
+  say: "can I put a call from 15:30 to 16:30?"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: check_overlap, time: "15:30", end_time: "16:30"}
+  kind: check_overlap_result
+  reply_has: ["Yes: today from 15:30 to 16:30 overlaps with meeting (16:00-17:00)."]
+
+- id: reads-10
+  say: "is the 9-10 slot free tomorrow?"
+  call: {tool: check_overlap, date: "{tomorrow}", time: "09:00", end_time: "10:00"}
+  reply_has: ["No: tomorrow from 09:00 to 10:00 you are free."]
+
+- id: reads-11
+  say: "is there a conflict if I add something between 6 and 7 pm tomorrow?"
+  split: holdout
+  seed: {events: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]}
+  call: {tool: check_overlap, date: "{tomorrow}", time: "18:00", end_time: "19:00"}
+  reply_has: ["overlaps with gym (18:00-19:00)"]
+
+- id: reads-12
+  say: "can I put something from 5 to 6 pm?"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: check_overlap, time: "17:00", end_time: "18:00"}
+  reply_has: ["you are free"]
+
+- id: reads-13
+  say: "is 6 pm free?"
+  call: {tool: check_overlap, time: "18:00"}
+  kind: missing_field:end_time
+  reply_has: ["Until what time?"]

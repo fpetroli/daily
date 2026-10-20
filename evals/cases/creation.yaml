@@ -1,0 +1,204 @@
+# Creating events: precise time, duration said in different ways, rules and usual times.
+# Today is Monday, September 21, 2026, 15:30 (see DEFAULT_NOW).
+
+- id: creation-01
+  say: "add gym tomorrow at 6 pm for an hour"
+  call: {tool: add_event, title: gym, date: "{tomorrow}", time: "18:00", duration_minutes: 60}
+  added: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+  kind: event_created
+
+- id: creation-02
+  say: "put team meeting today from 4 to 5 pm"
+  call: {tool: add_event, title: team meeting, time: "16:00", end_time: "17:00"}
+  added: [[team meeting, "{today}T16:00", "{today}T17:00"]]
+
+- id: creation-03
+  say: "call with Marco today at 17:00 for half an hour"
+  call: {tool: add_event, title: call with Marco, time: "17:00", duration_minutes: 30}
+  added: [[call with Marco, "{today}T17:00", "{today}T17:30"]]
+
+- id: creation-04
+  say: "tomorrow morning at 7 run for 45 minutes"
+  call: {tool: add_event, title: run, date: "{tomorrow}", time: "07:00", duration_minutes: 45}
+  added: [[run, "{tomorrow}T07:00", "{tomorrow}T07:45"]]
+
+- id: creation-05
+  say: "dinner with Sara tonight at 20:30, an hour and a half"
+  split: holdout
+  call: {tool: add_event, title: dinner with Sara, time: "20:30", duration_minutes: 90}
+  added: [[dinner with Sara, "{today}T20:30", "{today}T22:00"]]
+
+- id: creation-06
+  say: "block the 9-12 slot tomorrow for focused work"
+  call: {tool: add_event, title: focused work, date: "{tomorrow}", time: "09:00", end_time: "12:00"}
+  added: [[focused work, "{tomorrow}T09:00", "{tomorrow}T12:00"]]
+
+- id: creation-07
+  say: "remind me that tomorrow I have the dentist at 3 pm, it takes about an hour"
+  call: {tool: add_event, title: dentist, date: "{tomorrow}", time: "15:00", duration_minutes: 60}
+  added: [["dentist|the dentist", "{tomorrow}T15:00", "{tomorrow}T16:00"]]
+
+- id: creation-08
+  say: "yoga on thursday at 7 pm for 1 hour and 20"
+  call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 80}
+  added: [[yoga, "{thu}T19:00", "{thu}T20:20"]]
+
+- id: creation-09
+  say: "medical checkup on September 25 at 8 for 45 minutes"
+  call: {tool: add_event, title: medical checkup, date: "2026-09-25", time: "08:00", duration_minutes: 45}
+  added: [[medical checkup, "2026-09-25T08:00", "2026-09-25T08:45"]]
+
+- id: creation-10
+  say: "party at Luca's tonight at 11 pm, two hours"
+  split: holdout
+  call: {tool: add_event, title: party at Luca's, time: "23:00", duration_minutes: 120}
+  added: [["party at Luca's|party", "{today}T23:00", "{tomorrow}T01:00"]]
+
+- id: creation-11
+  say: "add sync with the team tomorrow at 11 for 1 hour"
+  call: {tool: add_event, title: sync with the team, date: "{tomorrow}", time: "11:00", duration_minutes: 60}
+  added: [[sync with the team, "{tomorrow}T11:00", "{tomorrow}T12:00"]]
+
+- id: creation-12
+  say: "I'd like to set up an appointment with the accountant on thursday at 11:30 for 45 minutes"
+  call: {tool: add_event, title: accountant, date: "{thu}", time: "11:30", duration_minutes: 45}
+  added: [["accountant|appointment with the accountant", "{thu}T11:30", "{thu}T12:15"]]
+
+# --- missing data: ask, do not write --------------------------------------------------
+
+- id: creation-13
+  say: "dentist on friday at 10"
+  call: {tool: add_event, title: dentist, date: "{fri}", time: "10:00"}
+  kind: insufficient_info
+  reply_has: ["How long does"]
+
+- id: creation-14
+  say: "add an event"
+  call: {tool: add_event}
+  kind: missing_field:title
+  reply_has: ["What is the event called"]
+
+- id: creation-15
+  say: "add yoga"
+  call: {tool: add_event, title: yoga}
+  kind: insufficient_info
+  reply_has: ["What time do you want"]
+
+- id: creation-16
+  say: "add a commitment tomorrow at 10"
+  split: holdout
+  call: {tool: add_event, date: "{tomorrow}", time: "10:00"}
+  kind: missing_field:title
+
+- id: creation-17
+  say: "add meeting from 6 pm to 5 pm"
+  call: {tool: add_event, title: meeting, time: "18:00", end_time: "17:00"}
+  kind: invalid_range
+
+# --- usual times and durations, rules --------------------------------------------------
+
+- id: creation-18
+  say: "schedule drinks on saturday at 7 pm"
+  seed: {defaults: [[drinks, null, 90]]}
+  call: {tool: add_event, title: drinks, date: "{sat}", time: "19:00"}
+  added: [[drinks, "{sat}T19:00", "{sat}T20:30"]]
+
+- id: creation-19
+  say: "add yoga tomorrow"
+  seed: {defaults: [[yoga, "19:00", 45]]}
+  call: {tool: add_event, title: yoga, date: "{tomorrow}"}
+  added: [[yoga, "{tomorrow}T19:00", "{tomorrow}T19:45"]]
+
+- id: creation-20
+  say: "add the shower"
+  seed:
+    events: [[gym, "{today}T17:00", "{today}T18:00"]]
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  call: {tool: add_event, title: shower}
+  added: [[shower, "{today}T18:00", "{today}T18:15"]]
+
+- id: creation-21
+  # "after X, N minutes" (without "for") is read as an offset, not a duration: with no known
+  # duration for "shower", the action stays pending and the duration is asked, as in creation-24.
+  say: "add the shower after the gym, 20 minutes"
+  seed: {events: [[gym, "{today}T17:00", "{today}T18:00"]]}
+  call: {tool: add_event_relative, title: shower, anchor_description: gym, position: after, offset_minutes: 20}
+  kind: missing_field:duration_minutes
+  reply_has: ["How long does"]
+
+- id: creation-22
+  say: "put the groceries before dinner for 30 minutes"
+  seed: {events: [[dinner, "{today}T20:00", "{today}T21:00"]]}
+  call: {tool: add_event_relative, title: groceries, anchor_description: dinner, position: before, duration_minutes: 30}
+  added: [[groceries, "{today}T19:30", "{today}T20:00"]]
+
+- id: creation-23
+  say: "add an espresso 10 minutes after lunch for a quarter of an hour"
+  split: holdout
+  seed: {events: [[lunch, "{today}T13:00", "{today}T14:00"]]}
+  call: {tool: add_event_relative, title: espresso, anchor_description: lunch, position: after, offset_minutes: 10, duration_minutes: 15}
+  added: [[espresso, "{today}T14:10", "{today}T14:25"]]
+
+- id: creation-24
+  say: "add shower after the gym"
+  seed: {events: [[gym, "{today}T17:00", "{today}T18:00"]]}
+  call: {tool: add_event_relative, title: shower, anchor_description: gym, position: after}
+  kind: missing_field:duration_minutes
+  reply_has: ["How long does"]
+
+- id: creation-25
+  say: "add shower after tomorrow's gym for 15 minutes"
+  seed: {events: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]}
+  call: {tool: add_event_relative, title: shower, anchor_description: gym, date: "{tomorrow}", position: after, duration_minutes: 15}
+  added: [[shower, "{tomorrow}T19:00", "{tomorrow}T19:15"]]
+
+# --- conflicts and proposals -----------------------------------------------------------
+
+- id: creation-26
+  say: "add call at 16:30 for an hour"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: add_event, title: call, time: "16:30", duration_minutes: 60}
+  added: [[call, "{today}T16:30", "{today}T17:30"]]
+  kind: event_created
+  reply_has: ["Warning: it overlaps with meeting (16:00-17:00)"]
+
+- id: creation-27
+  say: "add gym at 6 pm for an hour"
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15]]
+  call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}
+  added: [[gym, "{today}T18:00", "{today}T19:00"]]
+  reply_has: ['Shall I also add "shower" from 19:00 to 19:15?']
+  quick_replies: ["Yes", "No"]
+
+# --- anchor not in the schedule, usual gap ---------------------------------------------
+
+- id: creation-28
+  say: "add the shower"
+  seed:
+    rules: [[shower, gym, after, 0]]
+    defaults: [[shower, null, 15], [gym, "18:00", 60]]
+  call: {tool: add_event, title: shower}
+  kind: needs_anchor_confirmation
+  reply_has: ['I can''t find "gym"', "it is usually at 18:00"]
+
+- id: creation-29
+  say: "add dinner"
+  seed:
+    events: [[work, "{today}T09:00", "{today}T17:00"]]
+    rules: [[commute, work, before, null, 45], [dinner, work, before, 0]]
+    defaults: [[dinner, null, 60]]
+  call: {tool: add_event, title: dinner}
+  kind: needs_gap_confirmation
+  quick_replies: ["Yes", "No"]
+
+- id: creation-30
+  say: "add the shower"
+  seed:
+    events: [[gym, "{today}T17:00", "{today}T18:00"]]
+    rules: [[shower, gym, after, 0]]
+  call: {tool: add_event, title: shower}
+  kind: needs_duration_confirmation
+  reply_has: ['How long does "shower" usually last?']

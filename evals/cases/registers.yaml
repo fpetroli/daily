@@ -1,0 +1,102 @@
+# The same things said in different registers: typos, abbreviations, ellipsis, formal, slang.
+
+- id: registers-01
+  say: "ad gym tomorow at 6pm for an hr"
+  call: {tool: add_event, title: gym, date: "{tomorrow}", time: "18:00", duration_minutes: 60}
+  added: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+
+- id: registers-02
+  say: "gym tomorrow 18-19"
+  call: {tool: add_event, title: gym, date: "{tomorrow}", time: "18:00", end_time: "19:00"}
+  added: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+
+- id: registers-03
+  say: "tmrw dentist h 15 (1h)"
+  call: {tool: add_event, title: dentist, date: "{tomorrow}", time: "15:00", duration_minutes: 60}
+  added: [[dentist, "{tomorrow}T15:00", "{tomorrow}T16:00"]]
+
+- id: registers-04
+  say: "Good morning, could you please add a meeting with the supplier on Friday at 14:30, lasting 45 minutes? Thank you"
+  split: holdout
+  call: {tool: add_event, title: meeting with the supplier, date: "{fri}", time: "14:30", duration_minutes: 45}
+  added: [["meeting with the supplier|supplier", "{fri}T14:30", "{fri}T15:15"]]
+
+- id: registers-05
+  say: "go ahead and put dinner at mom's on saturday evening at 8, like 2 hours"
+  call: {tool: add_event, title: dinner at mom's, date: "{sat}", time: "20:00", duration_minutes: 120}
+  added: [["dinner at mom's|dinner", "{sat}T20:00", "{sat}T22:00"]]
+
+- id: registers-06
+  say: "today 5pm call with Marco 30min"
+  call: {tool: add_event, title: call with Marco, time: "17:00", duration_minutes: 30}
+  added: [[call with Marco, "{today}T17:00", "{today}T17:30"]]
+
+- id: registers-07
+  say: "push the call half an hour later pls"
+  seed: {events: [[call, "{today}T17:00", "{today}T17:30"]]}
+  call: {tool: update_event, event_description: call, shift_minutes: 30}
+  moved: [[[call, "{today}T17:00", "{today}T17:30"], [call, "{today}T17:30", "{today}T18:00"]]]
+
+- id: registers-08
+  say: "the 4 pm meeting, make it start at 16:30"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, event_time: "16:00", new_time: "16:30"}
+  moved: [[[meeting, "{today}T16:00", "{today}T17:00"], [meeting, "{today}T16:30", "{today}T17:30"]]]
+
+- id: registers-09
+  say: "get rid of tonight's dinner"
+  seed: {events: [[dinner, "{today}T20:00", "{today}T21:00"]]}
+  call: {tool: remove_event, event_description: dinner}
+  removed: [[dinner, "{today}T20:00", "{today}T21:00"]]
+
+- id: registers-10
+  say: "what've I got tomorrow?"
+  seed: {events: [[dentist, "{tomorrow}T15:00", "{tomorrow}T16:00"]]}
+  call: {tool: get_schedule, date: "{tomorrow}"}
+  reply_has: ["Tomorrow you have: dentist at 15:00."]
+
+- id: registers-11
+  say: "tomorrow am I free in the afternoon?"
+  seed: {events: [[dentist, "{tomorrow}T15:00", "{tomorrow}T16:00"]]}
+  call: {tool: get_free_slots, date: "{tomorrow}", time_band: afternoon}
+  reply_has: ["Tomorrow in the afternoon you are free: 12:00-15:00, 16:00-19:00."]
+
+- id: registers-12
+  say: "put me yoga thu h19 45 min"
+  split: holdout
+  call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 45}
+  added: [[yoga, "{thu}T19:00", "{thu}T19:45"]]
+
+- id: registers-13
+  say: "hey can you cancel the dentist? I can't make it anymore"
+  seed: {events: [[dentist, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: remove_event, event_description: dentist}
+  removed: [[dentist, "{today}T16:00", "{today}T17:00"]]
+
+- id: registers-14
+  say: "add gym tomorrow at 6 in the evening for 1 hour"
+  call: {tool: add_event, title: gym, date: "{tomorrow}", time: "18:00", duration_minutes: 60}
+  added: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+
+- id: registers-15
+  say: "lunch with the boss thursday noon for an hour and a half"
+  call: {tool: add_event, title: lunch with the boss, date: "{thu}", time: "12:00", duration_minutes: 90}
+  added: [[lunch with the boss, "{thu}T12:00", "{thu}T13:30"]]
+
+- id: registers-16
+  say: "book the dentist next monday at 9 for half an hour"
+  call: {tool: add_event, title: dentist, date: "{mon}", time: "09:00", duration_minutes: 30}
+  added: [[dentist, "{mon}T09:00", "{mon}T09:30"]]
+
+- id: registers-17
+  say: "delete whatever I have at 9"
+  split: holdout
+  seed: {events: [[breakfast, "{today}T09:00", "{today}T09:30"]]}
+  call: {tool: remove_event, event_time: "09:00"}
+  removed: [[breakfast, "{today}T09:00", "{today}T09:30"]]
+
+- id: registers-18
+  say: "make the 4 pm meeting a quarter of an hour longer"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, event_time: "16:00", extend_minutes: 15}
+  moved: [[[meeting, "{today}T16:00", "{today}T17:00"], [meeting, "{today}T16:00", "{today}T17:15"]]]

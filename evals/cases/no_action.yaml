@@ -1,0 +1,12 @@
+# Messages that are not about the schedule, or answers with no pending question.
+
+- {id: no-action-01, say: "hi, how does this app work?", call: {tool: none}, kind: no_action}
+- {id: no-action-02, say: "thanks, that's fine", call: {tool: none}, kind: no_action}
+- {id: no-action-03, say: "what day is today?", call: {tool: none}, kind: no_action}
+- {id: no-action-04, say: "are you an artificial intelligence?", split: holdout, call: {tool: none}, kind: no_action}
+- {id: no-action-05, say: "yes", call: {tool: none}, kind: no_action}
+- {id: no-action-06, say: "ok", call: {tool: none}, kind: no_action}
+- {id: no-action-07, say: "no thanks", call: {tool: none}, kind: no_action}
+- {id: no-action-08, say: "what's the weather in Rome?", call: {tool: none}, kind: no_action}
+- {id: no-action-09, say: "number two", split: holdout, call: {tool: none}, kind: no_action}
+- {id: no-action-10, say: "asdfgh", call: {tool: none}, kind: no_action}

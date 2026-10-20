@@ -1,0 +1,82 @@
+# Rules and usual times: teaching, removing and correcting them.
+
+- id: rules-01
+  say: "after the gym I always take a shower"
+  call: {tool: add_event_rule, trigger_title: shower, related_title: gym, position: after}
+  rules_added: [[shower, gym]]
+  kind: add_event_rule_success
+
+- id: rules-02
+  say: "I always have the team meeting at 3 pm"
+  call: {tool: add_event_rule, trigger_title: team meeting, typical_start: "15:00"}
+  defaults: {team meeting: ["15:00", null]}
+
+- id: rules-03
+  say: "the team meeting always lasts an hour"
+  call: {tool: add_event_rule, trigger_title: team meeting, typical_duration_minutes: 60}
+  defaults: {team meeting: [null, 60]}
+
+- id: rules-04
+  say: "before work I always need 20 minutes of commute"
+  call: {tool: add_event_rule, trigger_title: commute, related_title: work, position: before, gap_minutes: 20}
+  rules_added: [["commute|travel", work]]
+
+- id: rules-05
+  say: "delete the rule between gym and shower"
+  seed: {rules: [[shower, gym, after, 0]]}
+  call: {tool: remove_event_rule, trigger_title: shower, related_title: gym}
+  rules_removed: [[shower, gym]]
+  kind: remove_event_rule_success
+
+- id: rules-06
+  say: "stop remembering how long the team meeting lasts"
+  seed: {defaults: [[team meeting, "15:00", 60]]}
+  call: {tool: remove_event_rule, trigger_title: team meeting, field: typical_duration_minutes}
+  defaults: {team meeting: ["15:00", null]}
+
+- id: rules-07
+  say: "forget the times of the team meeting"
+  split: holdout
+  seed: {defaults: [[team meeting, "15:00", 60]]}
+  call: {tool: remove_event_rule, trigger_title: team meeting}
+  defaults_removed: [team meeting]
+
+- id: rules-08
+  say: "I always take the shower near the gym"
+  call: {tool: add_event_rule, trigger_title: shower, related_title: gym}
+  kind: add_event_rule_needs_position
+  quick_replies: ["Before", "After"]
+
+- id: rules-09
+  say: "I have breakfast at 8 and it lasts 20 minutes"
+  call: {tool: add_event_rule, trigger_title: breakfast, typical_start: "08:00", typical_duration_minutes: 20}
+  defaults: {breakfast: ["08:00", 20]}
+
+- id: rules-10
+  say: "delete the rule between yoga and dinner"
+  call: {tool: remove_event_rule, trigger_title: yoga, related_title: dinner}
+  kind: remove_event_rule_not_found
+
+- id: rules-11
+  say: "after work I always need 30 free minutes"
+  call: {tool: add_event_rule, related_title: work, position: after, gap_minutes: 30}
+  kind: missing_field:trigger_title
+  reply_has: ["What do you want to call this free slot?"]
+
+- id: rules-12
+  say: "the shower always goes 10 minutes after the gym"
+  split: holdout
+  seed: {rules: [[shower, gym, after, 0]]}
+  call: {tool: add_event_rule, trigger_title: shower, related_title: gym, position: after, offset_minutes: 10}
+  kind: add_event_rule_success
+
+- id: rules-13
+  say: "keep in mind that yoga is at 7 pm and lasts 45 minutes"
+  call: {tool: add_event_rule, trigger_title: yoga, typical_start: "19:00", typical_duration_minutes: 45}
+  defaults: {yoga: ["19:00", 45]}
+  reply_has: ['Done: "yoga" usually is at 19:00 and lasts 45 minutes.']
+
+- id: rules-14
+  say: "add a rule"
+  call: {tool: add_event_rule}
+  kind: missing_field:trigger_title

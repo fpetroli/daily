@@ -1,0 +1,33 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+/.venv/
+/build/
+/dist/
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration and data: never in the repository
+.env
+.env.*
+/data/
+/models/
+*.db
+*.db-wal
+*.db-shm
+
+# --- Model weights and exports ---
+*.gguf
+*.onnx
+*.safetensors
+*.bin
+
+# --- Editors and tools ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+.claude/
+.mcp.json
+CLAUDE.local.md

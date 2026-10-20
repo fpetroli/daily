@@ -1,0 +1,137 @@
+# Moving, lengthening, renaming events already in the schedule. Today Monday, September 21,
+# 2026, 15:30.
+
+- id: update-01
+  say: "move the meeting by half an hour"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, shift_minutes: 30}
+  moved: [[[meeting, "{today}T16:00", "{today}T17:00"], [meeting, "{today}T16:30", "{today}T17:30"]]]
+  kind: event_updated
+
+- id: update-02
+  say: "bring the meeting forward by 15 minutes"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, shift_minutes: -15}
+  moved: [[[meeting, "{today}T16:00", "{today}T17:00"], [meeting, "{today}T15:45", "{today}T16:45"]]]
+
+- id: update-03
+  say: "move lunch to 13:30"
+  seed: {events: [[lunch, "{today}T13:00", "{today}T14:00"]]}
+  call: {tool: update_event, event_description: lunch, new_time: "13:30"}
+  moved: [[[lunch, "{today}T13:00", "{today}T14:00"], [lunch, "{today}T13:30", "{today}T14:30"]]]
+
+- id: update-04
+  say: "move tomorrow's gym to 7 pm"
+  seed: {events: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]}
+  call: {tool: update_event, event_description: gym, event_date: "{tomorrow}", new_time: "19:00"}
+  moved: [[[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"], [gym, "{tomorrow}T19:00", "{tomorrow}T20:00"]]]
+
+- id: update-05
+  say: "extend the gym by 30 minutes"
+  seed: {events: [[gym, "{today}T18:00", "{today}T19:00"]]}
+  call: {tool: update_event, event_description: gym, extend_minutes: 30}
+  moved: [[[gym, "{today}T18:00", "{today}T19:00"], [gym, "{today}T18:00", "{today}T19:30"]]]
+
+- id: update-06
+  say: "shorten the meeting by 15 minutes"
+  split: holdout
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, extend_minutes: -15}
+  moved: [[[meeting, "{today}T16:00", "{today}T17:00"], [meeting, "{today}T16:00", "{today}T16:45"]]]
+
+- id: update-07
+  say: "rename the call with Marco to call with Marco and Luca"
+  seed: {events: [[call with Marco, "{today}T17:00", "{today}T17:30"]]}
+  call: {tool: update_event, event_description: call with Marco, new_title: call with Marco and Luca}
+  moved: [[[call with Marco, "{today}T17:00", "{today}T17:30"], [call with Marco and Luca, "{today}T17:00", "{today}T17:30"]]]
+
+- id: update-08
+  say: "bring the 3 pm meeting forward to 2 pm"
+  seed:
+    events:
+      - [meeting, "{today}T15:00", "{today}T16:00"]
+      - [meeting, "{today}T17:00", "{today}T18:00"]
+  call: {tool: update_event, event_description: meeting, event_time: "15:00", new_time: "14:00"}
+  moved: [[[meeting, "{today}T15:00", "{today}T16:00"], [meeting, "{today}T14:00", "{today}T15:00"]]]
+
+- id: update-09
+  say: "the call lasts 45 minutes instead of 30"
+  seed: {events: [[call, "{today}T17:00", "{today}T17:30"]]}
+  call: {tool: update_event, event_description: call, new_duration_minutes: 45}
+  moved: [[[call, "{today}T17:00", "{today}T17:30"], [call, "{today}T17:00", "{today}T17:45"]]]
+
+- id: update-10
+  say: "move dinner to friday at 8 pm"
+  seed: {events: [[dinner, "{today}T20:00", "{today}T21:00"]]}
+  call: {tool: update_event, event_description: dinner, new_date: "{fri}", new_time: "20:00"}
+  moved: [[[dinner, "{today}T20:00", "{today}T21:00"], [dinner, "{fri}T20:00", "{fri}T21:00"]]]
+
+- id: update-11
+  say: "move the 8 pm event to 9 pm"
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - [dinner, "{today}T20:00", "{today}T21:00"]
+  call: {tool: update_event, event_time: "20:00", new_time: "21:00"}
+  moved: [[[dinner, "{today}T20:00", "{today}T21:00"], [dinner, "{today}T21:00", "{today}T22:00"]]]
+
+# --- missing data, not found, ambiguous, invalid: no writes ------------------------------
+
+- id: update-12
+  say: "move lunch"
+  seed: {events: [[lunch, "{today}T13:00", "{today}T14:00"]]}
+  call: {tool: update_event, event_description: lunch}
+  kind: missing_field:change
+  reply_has: ['What do you want to change about "lunch"']
+
+- id: update-13
+  say: "move the meeting later"
+  split: holdout
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting}
+  kind: missing_field:change
+
+- id: update-14
+  say: "move the call by 5 minutes"
+  seed:
+    events:
+      - [call with Marco, "{today}T10:00", "{today}T10:30"]
+      - [call with the client, "{today}T15:00", "{today}T15:30"]
+  call: {tool: update_event, event_description: call, shift_minutes: 5}
+  kind: event_ambiguous
+  quick_replies: ["call with Marco at 10:00", "call with the client at 15:00"]
+
+- id: update-15
+  say: "move the dentist to 10"
+  call: {tool: update_event, event_description: dentist, new_time: "10:00"}
+  kind: event_not_found
+  reply_has: ['I can''t find any event "dentist" in the schedule today']
+
+- id: update-16
+  say: "the meeting ends at 3 pm"
+  seed: {events: [[meeting, "{today}T16:00", "{today}T17:00"]]}
+  call: {tool: update_event, event_description: meeting, new_end_time: "15:00"}
+  kind: invalid_range
+
+# --- cascade and conflicts -----------------------------------------------------------------
+
+- id: update-17
+  say: "move the gym by half an hour"
+  seed:
+    events:
+      - [gym, "{today}T18:00", "{today}T19:00"]
+      - {title: shower, start: "{today}T19:00", end: "{today}T19:15", parent: gym}
+  call: {tool: update_event, event_description: gym, shift_minutes: 30}
+  moved: [[[gym, "{today}T18:00", "{today}T19:00"], [gym, "{today}T18:30", "{today}T19:30"]]]
+  reply_has: ['Shall I also move "shower" from 19:30 to 19:45?']
+  quick_replies: ["Yes", "No"]
+
+- id: update-18
+  say: "move lunch to 10:30"
+  seed:
+    events:
+      - [meeting, "{today}T10:00", "{today}T11:00"]
+      - [lunch, "{today}T13:00", "{today}T14:00"]
+  call: {tool: update_event, event_description: lunch, new_time: "10:30"}
+  moved: [[[lunch, "{today}T13:00", "{today}T14:00"], [lunch, "{today}T10:30", "{today}T11:30"]]]
+  reply_has: ["Warning: it overlaps with meeting (10:00-11:00)"]
