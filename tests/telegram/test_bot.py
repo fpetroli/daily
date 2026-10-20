@@ -11,7 +11,15 @@ from daily.agent.turn import TurnService
 from daily.services.context import Repositories
 from daily.telegram import bot as bot_module
 from daily.telegram.api import TelegramError
-from daily.telegram.bot import EXPIRED, NOT_ALLOWED, ONLY_TEXT, Bot
+from daily.telegram.bot import (
+    CLEARED,
+    EXPIRED,
+    NOT_ALLOWED,
+    NOT_DELETED,
+    OLDER_KEPT,
+    ONLY_TEXT,
+    Bot,
+)
 from scripted import ScriptedParser
 from turn_log import read_turn
 
@@ -32,6 +40,8 @@ class FakeApi:
         self.styles: list[tuple] = []
         self.edited: list[tuple[int, int, str]] = []
         self.unbuttoned: list[tuple[int, int]] = []
+        self.deleted: list[tuple[int, list[int]]] = []
+        self.delete_error: Exception | None = None
         self.answered: list[tuple[str, str | None]] = []
         self.commands: list[tuple[str, str]] = []
         self.updates: list = []
@@ -57,6 +67,11 @@ class FakeApi:
 
     async def remove_buttons(self, chat_id, message_id):
         self.unbuttoned.append((chat_id, message_id))
+
+    async def delete_messages(self, chat_id, message_ids):
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted.append((chat_id, list(message_ids)))
 
     async def answer_callback_query(self, callback_query_id, text=None):
         self.answered.append((callback_query_id, text))
@@ -349,6 +364,43 @@ async def test_start_help_and_unknown_commands(bot, api):
 
     assert "/today - Today's schedule" in api.texts[0]
     assert api.texts[1].startswith("I don't know that command.")
+
+
+async def test_clear_deletes_the_chat_and_starts_the_conversation_over(bot, api, parser, repos):
+    parser.then(gym_tomorrow(), {"tool": "none"})
+    await bot.handle_update(message("gym tomorrow at 6 pm for an hour", message_id=1))
+    await bot.handle_update(message("/today", message_id=3))
+
+    await bot.handle_update(message("/clear", message_id=5))
+
+    assert api.deleted == [(USER, [1, 3, 5, 101, 102])]
+    assert api.texts[-1] == CLEARED
+    assert repos.chat_messages.list_for(USER) == [(103, SENT_AT)]  # only the confirmation
+    assert len(repos.schedule.events_for_date(TOMORROW)) == 1  # the schedule stays
+
+    await bot.handle_update(press("u:1"))  # the Undo button went with its message
+    assert api.answered == [("cb", EXPIRED)]
+
+    await bot.handle_update(message("thanks", message_id=7))
+    assert parser.requests[-1].history == ()  # the model no longer reads the old replies
+
+
+async def test_clear_leaves_what_telegram_no_longer_deletes_and_says_so(bot, api, repos):
+    repos.chat_messages.record(USER, 1, SENT_AT - 48 * 3600)
+
+    await bot.handle_update(message("/clear", message_id=2))
+
+    assert api.deleted == [(USER, [2])]
+    assert api.texts[-1] == f"{CLEARED}\n\n{OLDER_KEPT}"
+    assert repos.chat_messages.list_for(USER) == [(101, SENT_AT)]
+
+
+async def test_clear_that_telegram_refuses_says_so(bot, api, repos):
+    api.delete_error = TelegramError("deleteMessages", 400, "Bad Request")
+
+    await bot.handle_update(message("/clear", message_id=2))
+
+    assert api.texts[-1] == f"{CLEARED}\n\n{NOT_DELETED}"
 
 
 # --- polling ---------------------------------------------------------------------------

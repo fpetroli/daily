@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from daily.agent.templates import Styled
-from daily.telegram.api import MAX_TEXT, TelegramApi, TelegramError
+from daily.telegram.api import MAX_DELETE, MAX_TEXT, TelegramApi, TelegramError
 
 TOKEN = "123456:ABC-test-token-value"
 
@@ -83,6 +83,16 @@ async def test_styles_past_the_length_limit_are_cut_or_dropped():
 
     [(_, body)] = calls
     assert body["entities"] == [{"type": "bold", "offset": MAX_TEXT - 2, "length": 2}]
+
+
+async def test_delete_messages_goes_in_batches():
+    api, calls = recording_api({"ok": True, "result": True})
+
+    await api.delete_messages(42, list(range(1, MAX_DELETE + 3)))
+
+    assert [path.rsplit("/", 1)[1] for path, _ in calls] == ["deleteMessages"] * 2
+    assert calls[0][1] == {"chat_id": 42, "message_ids": list(range(1, MAX_DELETE + 1))}
+    assert calls[1][1]["message_ids"] == [MAX_DELETE + 1, MAX_DELETE + 2]
 
 
 async def test_polling_asks_only_for_messages_and_buttons():

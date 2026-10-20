@@ -141,6 +141,18 @@ async def test_after_a_restart_the_history_is_empty(repos, parser):
     assert parser.requests[1].history == ()
 
 
+async def test_forget_starts_the_conversation_over(repos, parser, turn):
+    parser.then({"tool": "add_event", "title": "yoga"}, {"tool": "none"})
+    await say(turn, "add yoga")
+
+    await turn.forget()
+    result = await say(turn, "at 7 pm")
+
+    assert parser.requests[1].history == ()
+    assert "I can add, move or delete events" in result.reply.text  # no pending question
+    assert repos.turn_log.latest_turn_id() is not None  # the turn log stays
+
+
 async def test_a_failed_turn_now_enters_the_history_too(parser, turn):
     """The history no longer depends on `expects_reply`: even a turn that ended in an error now
     appears in the window of the last 3."""

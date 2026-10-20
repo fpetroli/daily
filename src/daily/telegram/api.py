@@ -17,6 +17,7 @@ TELEGRAM_URL = "https://api.telegram.org"
 POLL_SECONDS = 50
 _HTTP_TIMEOUT = POLL_SECONDS + 15
 MAX_TEXT = 4096  # longest message Telegram accepts
+MAX_DELETE = 100  # most messages `deleteMessages` takes at once
 
 # One inline button: (label, callback data). Telegram allows at most 64 bytes of data.
 Button = tuple[str, str]
@@ -98,6 +99,15 @@ class TelegramApi:
             message_id=message_id,
             reply_markup={"inline_keyboard": []},
         )
+
+    async def delete_messages(self, chat_id: int, message_ids: Sequence[int]) -> None:
+        """Deletes the messages, `MAX_DELETE` per call; Telegram skips those it cannot find."""
+        for start in range(0, len(message_ids), MAX_DELETE):
+            await self._call(
+                "deleteMessages",
+                chat_id=chat_id,
+                message_ids=list(message_ids[start : start + MAX_DELETE]),
+            )
 
     async def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         await self._call("answerCallbackQuery", callback_query_id=callback_query_id, text=text)

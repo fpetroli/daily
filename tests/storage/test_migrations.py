@@ -21,6 +21,7 @@ def test_creates_all_tables_and_seeds_app_settings(conn):
         "gap_patterns",
         "action_log",
         "turn_log",
+        "chat_messages",
     } <= tables
 
     settings = {
@@ -33,7 +34,7 @@ def test_creates_all_tables_and_seeds_app_settings(conn):
 
 
 def test_user_version_reaches_the_last_migration(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_reopening_a_file_does_not_reapply_migrations(tmp_path):
@@ -45,7 +46,7 @@ def test_reopening_a_file_does_not_reapply_migrations(tmp_path):
     second = open_database(path)
 
     assert second.execute("SELECT COUNT(*) FROM event_defaults").fetchone()[0] == 1
-    assert second.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert second.execute("PRAGMA user_version").fetchone()[0] == 2
     second.close()
 
 

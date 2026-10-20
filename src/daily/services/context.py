@@ -6,6 +6,7 @@ from typing import Self
 
 from daily.services.resolver import EventDescriptionResolver
 from daily.storage.action_log_repo import ActionLogRepository
+from daily.storage.chat_messages_repo import ChatMessagesRepository
 from daily.storage.defaults_repo import EventDefaultsRepository
 from daily.storage.notes_repos import (
     EventPatternsRepository,
@@ -32,6 +33,7 @@ class Repositories:
     trigger_duration_patterns: TriggerDurationPatternsRepository
     action_log: ActionLogRepository
     turn_log: TurnLogRepository
+    chat_messages: ChatMessagesRepository
     resolver: EventDescriptionResolver
 
     @classmethod
@@ -49,5 +51,6 @@ class Repositories:
             trigger_duration_patterns=TriggerDurationPatternsRepository(conn),
             action_log=ActionLogRepository(conn),
             turn_log=TurnLogRepository(conn),
+            chat_messages=ChatMessagesRepository(conn),
             resolver=EventDescriptionResolver(schedule),
         )

@@ -5,6 +5,9 @@ The bot asks Telegram for new messages (long polling): the service opens no port
 user ids in the allowlist are served, and only in private chats: the schedule is personal.
 The time of a turn is the sending time of the message in the configured time zone.
 
+The bot keeps the ids of the messages of the chat, the user's and its own, so that `/clear`
+can delete those Telegram still allows (the last 48 hours) and start the conversation over.
+
 Updates are handled one at a time, in order: one user, one model, and a turn already
 serializes on its own lock. Only the buttons of the last reply act: the model reads the
 answer against the recent history, so an answer to an older question would be misread.
@@ -42,6 +45,7 @@ COMMANDS = [
     ("undo", "Undo the last change"),
     ("report", "Flag the last reply: /report what went wrong"),
     ("settings", "Habit detection settings"),
+    ("clear", "Clear the chat and start over"),
     ("help", "What I can do"),
 ]
 HELP = (
@@ -59,6 +63,11 @@ EXPIRED = "This button has expired."
 NOTHING_TO_REPORT = "There is no reply to report yet."
 REPORTED = "Thanks: I flagged the last reply."
 UNDO = "Undo"
+CLEARED = "Chat cleared. Your schedule and rules are untouched."
+OLDER_KEPT = (
+    "Telegram lets me delete only the last 48 hours: clear older messages from the chat menu."
+)
+NOT_DELETED = "I could not delete some messages: clear them from the chat menu."
 
 # key: (minimum, maximum, unit, meaning)
 SETTINGS = {
@@ -70,6 +79,8 @@ SETTINGS = {
 _TYPING_SECONDS = 4.0  # Telegram shows "typing" for about 5 s
 _RETRY_SECONDS = (1.0, 60.0)  # first and longest wait after a failed `getUpdates`
 _SHORT_LABEL = 12  # quick replies up to this length share a row
+# Telegram deletes only messages younger than 48 hours: one minute of margin.
+_DELETABLE_SECONDS = 48 * 3600 - 60
 
 
 class Api(Protocol):
@@ -84,6 +95,7 @@ class Api(Protocol):
     ) -> dict[str, Any]: ...
     async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None: ...
     async def remove_buttons(self, chat_id: int, message_id: int) -> None: ...
+    async def delete_messages(self, chat_id: int, message_ids: Sequence[int]) -> None: ...
     async def answer_callback_query(
         self, callback_query_id: str, text: str | None = None
     ) -> None: ...
@@ -174,9 +186,12 @@ class Bot:
         if user_id not in self._allowed:
             await self._api.send_message(chat_id, NOT_ALLOWED.format(user_id=user_id))
             return
+        self._repos.chat_messages.record(
+            chat_id, message["message_id"], message.get("date") or int(self._clock())
+        )
         text = (message.get("text") or "").strip()
         if not text:
-            await self._api.send_message(chat_id, ONLY_TEXT)
+            await self._send(chat_id, ONLY_TEXT)
             return
         now = self._now(message.get("date"))
         if text.startswith("/"):
@@ -196,11 +211,23 @@ class Bot:
         self._seq += 1
         reply = result.reply
         buttons = _buttons(self._seq, reply.quick_replies, _wrote_schedule(result.execution))
-        sent = await self._api.send_message(chat_id, reply.text, buttons, reply.styles)
+        sent = await self._send(chat_id, reply.text, buttons, reply.styles)
         if buttons:
             self._prompt = _Prompt(
                 self._seq, chat_id, sent["message_id"], reply.text, reply.quick_replies
             )
+
+    async def _send(
+        self,
+        chat_id: int,
+        text: str,
+        buttons: list[list[Button]] | None = None,
+        styles: Sequence[Styled] = (),
+    ) -> dict[str, Any]:
+        """Sends a message and keeps its id, so that `/clear` can delete it."""
+        sent = await self._api.send_message(chat_id, text, buttons, styles)
+        self._repos.chat_messages.record(chat_id, sent["message_id"], int(self._clock()))
+        return sent
 
     async def _keep_typing(self, chat_id: int) -> None:
         while True:
@@ -241,7 +268,7 @@ class Bot:
         if kind == "u":
             with suppress(TelegramError, httpx.HTTPError):
                 await self._api.remove_buttons(prompt.chat_id, prompt.message_id)
-            await self._api.send_message(prompt.chat_id, self._undo(now))
+            await self._send(prompt.chat_id, self._undo(now))
             return
         answer = prompt.quick_replies[index]
         # The chosen answer stays visible under the question, in place of the buttons.
@@ -275,11 +302,13 @@ class Bot:
                 reply = self._report(args)
             case "settings":
                 reply = self._settings(args)
+            case "clear":
+                reply = await self._clear(chat_id)
             case _:
                 reply = UNKNOWN_COMMAND
         if isinstance(reply, str):
             reply = Reply(reply)
-        await self._api.send_message(chat_id, reply.text, styles=reply.styles)
+        await self._send(chat_id, reply.text, styles=reply.styles)
 
     def _schedule(self, day: date, now: datetime) -> Reply:
         """The same read as "what do I have today?", without the model."""
@@ -297,6 +326,24 @@ class Bot:
             return NOTHING_TO_REPORT
         self._repos.turn_log.flag(turn_id, note)
         return REPORTED
+
+    async def _clear(self, chat_id: int) -> str:
+        """Deletes the messages Telegram still lets the bot delete and starts the conversation
+        over: the model no longer reads replies the user cannot see."""
+        self._prompt = None  # its message goes with the others
+        await self._turn.forget()
+        oldest = int(self._clock()) - _DELETABLE_SECONDS
+        messages = self._repos.chat_messages.list_for(chat_id)
+        recent = [message_id for message_id, sent_at in messages if sent_at > oldest]
+        note = OLDER_KEPT if len(recent) < len(messages) else ""
+        try:
+            if recent:
+                await self._api.delete_messages(chat_id, recent)
+        except (TelegramError, httpx.HTTPError):
+            logger.warning("Could not delete the chat messages")
+            note = NOT_DELETED
+        self._repos.chat_messages.forget(chat_id)
+        return f"{CLEARED}\n\n{note}" if note else CLEARED
 
     def _settings(self, args: str) -> str:
         if not args:

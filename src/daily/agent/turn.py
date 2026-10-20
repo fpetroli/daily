@@ -98,6 +98,12 @@ class TurnService:
             self._prune_history()
             return replace(result, turn_id=turn_id)
 
+    async def forget(self) -> None:
+        """Starts the conversation over: the history and the pending question are dropped.
+        The schedule, the rules and the turn log stay."""
+        async with self._lock:
+            self._workflow.delete_session(self._session_id)
+
     # --- turn log and history cap -------------------------------------------------
 
     def _log_turn(
