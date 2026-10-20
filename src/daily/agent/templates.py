@@ -12,6 +12,7 @@ It never raises: an outcome it does not know becomes a generic message.
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Literal
 
 from daily.agent.parser import ParseFailure
 from daily.agent.prompts import WEEKDAYS
@@ -63,7 +64,7 @@ from daily.services.schedule import (
     NeedsDurationConfirmation,
     NeedsGapConfirmation,
 )
-from daily.services.types import CheckOverlapResult, EventInfo
+from daily.services.types import CheckOverlapResult, EventInfo, ScheduleEntry
 from daily.services.undo import Undone
 
 MONTHS = [
@@ -102,6 +103,17 @@ BAND_PHRASES = {
 
 
 @dataclass(frozen=True, slots=True)
+class Styled:
+    """A stretch of a reply's text in bold or struck through, `start` and `end` as string
+    indices. The text reads the same without it: each channel renders it its own way (Telegram
+    as a message entity) or ignores it, and the model's history keeps only the text."""
+
+    style: Literal["bold", "strikethrough"]
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, slots=True)
 class Reply:
     """The reply of a turn. `quick_replies` are the texts sent as the user's answer when
     tapped."""
@@ -109,6 +121,7 @@ class Reply:
     text: str
     quick_replies: tuple[str, ...] = ()
     expects_reply: bool = False
+    styles: tuple[Styled, ...] = ()
 
 
 def render(execution: object, now: datetime) -> Reply:
@@ -161,8 +174,10 @@ def day_label(day: date | str, today: date) -> str:
     relative = {0: "today", 1: "tomorrow", 2: "the day after tomorrow", -1: "yesterday"}.get(
         (target - today).days
     )
-    if relative:
-        return relative
+    return relative or _calendar_date(target, today)
+
+
+def _calendar_date(target: date, today: date) -> str:
     label = f"{WEEKDAYS[target.weekday()]}, {MONTHS[target.month - 1]} {target.day}"
     return label if target.year == today.year else f"{label}, {target.year}"
 
@@ -288,7 +303,7 @@ def _render_outcome(executed: Executed, today: date) -> Reply:
         case CheckOverlapResult():
             return _overlap(call, outcome, today)
         case ScheduleView():
-            return Reply(_schedule_text(outcome, today))
+            return _schedule_reply(outcome, today)
         case FreeSlotsView():
             return Reply(_free_slots_text(outcome, today))
         case AddEventRuleSuccess() if isinstance(call, AddEventRuleCall):
@@ -429,21 +444,71 @@ def _prefix(day: str, band: object, today: date) -> str:
     return f"{label} {BAND_PHRASES[band.value]}" if band else label
 
 
-def _schedule_text(view: ScheduleView, today: date) -> str:
-    prefix = _prefix(view.date, view.time_band, today)
+class _StyledText:
+    """A reply written piece by piece, each piece with its styles."""
+
+    def __init__(self) -> None:
+        self._text = ""
+        self._styles: list[Styled] = []
+
+    def add(self, piece: str, *styles: Literal["bold", "strikethrough"]) -> None:
+        start = len(self._text)
+        self._text += piece
+        self._styles.extend(Styled(style, start, len(self._text)) for style in styles)
+
+    def reply(self) -> Reply:
+        return Reply(self._text, styles=tuple(self._styles))
+
+
+def _schedule_reply(view: ScheduleView, today: date) -> Reply:
+    """A header with the day, then one card per event: the title in bold, then start, end and
+    duration; the events already over are struck through. A light line tells the free time
+    between two events; a whole day ends with how much time passes until the first event of
+    the next day, and that event. Gaps run from the latest end so far: overlaps have none."""
+    out = _StyledText()
+    out.add(_day_header(view.date, view.time_band, today))
     if not view.entries:
-        return f"{prefix} you have nothing planned."
-    done = [e for e in view.entries if e.done]
-    todo = [e for e in view.entries if not e.done]
+        out.add("\n\nNothing planned.")
+    latest_end = None
+    for entry in view.entries:
+        if latest_end is not None and (gap := minutes_between_iso(latest_end, entry.start)) > 0:
+            out.add(f"\n\n┄┄ {_duration(gap)} ┄┄")
+        _card(out, entry)
+        latest_end = max(latest_end or entry.end, entry.end)
+    if view.following is not None and latest_end is not None:
+        gap = minutes_between_iso(latest_end, view.following.start)
+        out.add(f"\n\n──── {_duration(gap)} ────" if gap > 0 else "\n\n────────────")
+        out.add(f"\n\n{_day_header(_date_of(view.following.start).isoformat(), None, today)}")
+        _card(out, view.following)
+    return out.reply()
 
-    def listed(entries) -> str:
-        return ", ".join(f"{e.title} at {_time_of(e.start)}" for e in entries)
 
-    if not done:
-        return f"{prefix} you have: {listed(todo)}."
-    if not todo:
-        return f"{prefix} you have already done everything: {listed(done)}."
-    return f"{prefix} you have already done: {listed(done)}. Still to do: {listed(todo)}."
+def _day_header(day: str, band: object, today: date) -> str:
+    """The day, with its date after a relative one: "Today · Monday, September 21"."""
+    header = _prefix(day, band, today)
+    if day_label(day, today)[:1].islower():
+        header += f" · {_calendar_date(date.fromisoformat(day), today)}"
+    return header
+
+
+def _card(out: _StyledText, entry: ScheduleEntry) -> None:
+    over = ("strikethrough",) if entry.done else ()
+    out.add("\n\n")
+    out.add(entry.title, "bold", *over)
+    out.add("\n")
+    minutes = minutes_between_iso(entry.start, entry.end)
+    out.add(
+        f"{_time_of(entry.start)} → {_end_of(entry.start, entry.end)} · {_duration(minutes)}",
+        *over,
+    )
+
+
+def _duration(minutes: int) -> str:
+    """The duration as "45 min", "1 h" or "1 h 30 min"."""
+    hours, rest = divmod(minutes, 60)
+    if not hours:
+        return f"{rest} min"
+    return f"{hours} h {rest} min" if rest else f"{hours} h"
 
 
 def _free_slots_text(view: FreeSlotsView, today: date) -> str:

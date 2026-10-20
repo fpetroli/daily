@@ -53,7 +53,7 @@
   say: "what've I got tomorrow?"
   seed: {events: [[dentist, "{tomorrow}T15:00", "{tomorrow}T16:00"]]}
   call: {tool: get_schedule, date: "{tomorrow}"}
-  reply_has: ["Tomorrow you have: dentist at 15:00."]
+  reply_has: ["dentist\n15:00 → 16:00 · 1 h"]
 
 - id: registers-11
   say: "tomorrow am I free in the afternoon?"

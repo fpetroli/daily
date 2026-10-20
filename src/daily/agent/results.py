@@ -17,11 +17,13 @@ from daily.services.types import FreeSlot, ScheduleEntry
 
 @dataclass(frozen=True, slots=True)
 class ScheduleView:
-    """Schedule of one day, with the requested band: to describe it ("this afternoon")."""
+    """Schedule of one day, with the requested band: to describe it ("this afternoon").
+    `following` is the first event of the next day, shown after the whole day's events."""
 
     date: str
     time_band: TimeBand | None
     entries: tuple[ScheduleEntry, ...]
+    following: ScheduleEntry | None = None
 
 
 @dataclass(frozen=True, slots=True)

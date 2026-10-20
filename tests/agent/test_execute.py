@@ -281,6 +281,27 @@ def test_get_schedule_filters_by_band_and_day(repos):
     assert [e.title for e in view.entries] == ["dinner"]
 
 
+def test_a_whole_day_also_brings_the_first_event_of_the_next_day(repos):
+    add_event(repos, "dinner", f"{TODAY}T20:00", f"{TODAY}T21:00")
+    add_event(repos, "gym", f"{TOMORROW}T18:00", f"{TOMORROW}T19:00")
+    add_event(repos, "breakfast", f"{TOMORROW}T08:00", f"{TOMORROW}T08:30")
+    add_event(repos, "later", "2026-09-23T07:00", "2026-09-23T08:00")
+
+    view = outcome_of(run(repos, tool="get_schedule"))
+
+    assert view.following is not None and view.following.title == "breakfast"
+
+
+def test_no_next_day_event_for_a_band_an_empty_day_or_an_empty_next_day(repos):
+    add_event(repos, "breakfast", f"{TOMORROW}T08:00", f"{TOMORROW}T08:30")
+
+    assert outcome_of(run(repos, tool="get_schedule")).following is None  # empty today
+    add_event(repos, "dinner", f"{TODAY}T20:00", f"{TODAY}T21:00")
+    banded = outcome_of(run(repos, tool="get_schedule", time_band="evening"))
+    assert banded.entries and banded.following is None
+    assert outcome_of(run(repos, tool="get_schedule", date=TOMORROW)).following is None
+
+
 def test_get_free_slots_starts_from_current_time_if_today(repos):
     view = outcome_of(run(repos, tool="get_free_slots"))
 

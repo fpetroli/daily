@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from daily.agent.templates import Styled
 from daily.telegram.api import MAX_TEXT, TelegramApi, TelegramError
 
 TOKEN = "123456:ABC-test-token-value"
@@ -47,7 +48,41 @@ async def test_without_buttons_no_markup_and_long_texts_are_cut():
 
     [(_, body)] = calls
     assert "reply_markup" not in body
+    assert "entities" not in body
     assert len(body["text"]) == MAX_TEXT
+
+
+async def test_styles_become_entities_counted_in_utf16_units():
+    api, calls = recording_api({"ok": True, "result": {"message_id": 5}})
+    text = "Today 🏃 · run\n07:00"
+
+    await api.send_message(
+        42, text, styles=[Styled("bold", 10, 13), Styled("strikethrough", 14, 19)]
+    )
+
+    [(_, body)] = calls
+    assert body["text"] == text
+    # The emoji takes two UTF-16 units: everything after it moves by one.
+    assert body["entities"] == [
+        {"type": "bold", "offset": 11, "length": 3},
+        {"type": "strikethrough", "offset": 15, "length": 5},
+    ]
+
+
+async def test_styles_past_the_length_limit_are_cut_or_dropped():
+    api, calls = recording_api({"ok": True, "result": {"message_id": 5}})
+
+    await api.send_message(
+        42,
+        "x" * (MAX_TEXT + 10),
+        styles=[
+            Styled("bold", MAX_TEXT - 2, MAX_TEXT + 5),
+            Styled("bold", MAX_TEXT + 1, MAX_TEXT + 3),
+        ],
+    )
+
+    [(_, body)] = calls
+    assert body["entities"] == [{"type": "bold", "offset": MAX_TEXT - 2, "length": 2}]
 
 
 async def test_polling_asks_only_for_messages_and_buttons():

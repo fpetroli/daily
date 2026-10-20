@@ -13,7 +13,7 @@ answer against the recent history, so an answer to an older question would be mi
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -25,7 +25,7 @@ import httpx
 from daily.agent.execute import execute
 from daily.agent.results import Executed, Execution
 from daily.agent.schemas import parse_tool_call
-from daily.agent.templates import render, rules_text, undone_text
+from daily.agent.templates import Reply, Styled, render, rules_text, undone_text
 from daily.agent.turn import TurnService
 from daily.services.context import Repositories
 from daily.services.schedule import EventCreated, EventRemoved, EventUpdated
@@ -76,7 +76,11 @@ class Api(Protocol):
     async def get_me(self) -> dict[str, Any]: ...
     async def get_updates(self, offset: int | None) -> list[dict[str, Any]]: ...
     async def send_message(
-        self, chat_id: int, text: str, buttons: list[list[Button]] | None = None
+        self,
+        chat_id: int,
+        text: str,
+        buttons: list[list[Button]] | None = None,
+        styles: Sequence[Styled] = (),
     ) -> dict[str, Any]: ...
     async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None: ...
     async def remove_buttons(self, chat_id: int, message_id: int) -> None: ...
@@ -192,7 +196,7 @@ class Bot:
         self._seq += 1
         reply = result.reply
         buttons = _buttons(self._seq, reply.quick_replies, _wrote_schedule(result.execution))
-        sent = await self._api.send_message(chat_id, reply.text, buttons)
+        sent = await self._api.send_message(chat_id, reply.text, buttons, reply.styles)
         if buttons:
             self._prompt = _Prompt(
                 self._seq, chat_id, sent["message_id"], reply.text, reply.quick_replies
@@ -258,7 +262,9 @@ class Bot:
                 reply = HELP
             case "today" | "tomorrow":
                 days = 1 if name == "tomorrow" else 0
-                reply = self._schedule(now.date() + timedelta(days=days), now)
+                schedule = self._schedule(now.date() + timedelta(days=days), now)
+                await self._api.send_message(chat_id, schedule.text, styles=schedule.styles)
+                return
             case "rules":
                 reply = rules_text(
                     self._repos.event_rules.get_all(), self._repos.event_defaults.list_all()
@@ -274,10 +280,10 @@ class Bot:
                 reply = UNKNOWN_COMMAND
         await self._api.send_message(chat_id, reply)
 
-    def _schedule(self, day: date, now: datetime) -> str:
+    def _schedule(self, day: date, now: datetime) -> Reply:
         """The same read as "what do I have today?", without the model."""
         call = parse_tool_call({"tool": "get_schedule", "date": day.isoformat()})
-        return render(execute(self._repos, call, now=now), now).text
+        return render(execute(self._repos, call, now=now), now)
 
     def _undo(self, now: datetime) -> str:
         with transaction(self._repos.conn):

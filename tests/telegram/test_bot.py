@@ -29,6 +29,7 @@ class FakeApi:
 
     def __init__(self) -> None:
         self.sent: list[tuple[int, str, list | None]] = []
+        self.styles: list[tuple] = []
         self.edited: list[tuple[int, int, str]] = []
         self.unbuttoned: list[tuple[int, int]] = []
         self.answered: list[tuple[str, str | None]] = []
@@ -46,8 +47,9 @@ class FakeApi:
             raise item
         return item
 
-    async def send_message(self, chat_id, text, buttons=None):
+    async def send_message(self, chat_id, text, buttons=None, styles=()):
         self.sent.append((chat_id, text, buttons))
+        self.styles.append(tuple(styles))
         return {"message_id": 100 + len(self.sent)}
 
     async def edit_message_text(self, chat_id, message_id, text):
@@ -277,7 +279,16 @@ async def test_today_and_tomorrow_read_without_the_model(bot, api, parser, repos
     await bot.handle_update(message("/today"))
     await bot.handle_update(message("/tomorrow@daily_bot"))
 
-    assert api.texts == ["Today you have nothing planned.", "Tomorrow you have: gym at 18:00."]
+    assert api.texts == [
+        "Today · Monday, September 21\n\nNothing planned.",
+        "Tomorrow · Tuesday, September 22\n\ngym\n18:00 → 19:00 · 1 h",
+    ]
+    assert [[s.style for s in styles] for styles in api.styles] == [[], ["bold"]]
+    repos.schedule.insert_event(title="dinner", start=f"{TODAY}T20:00", end=f"{TODAY}T21:00")
+    await bot.handle_update(message("/today"))
+    assert api.texts[-1].endswith(
+        "──── 21 h ────\n\nTomorrow · Tuesday, September 22\n\ngym\n18:00 → 19:00 · 1 h"
+    )
     assert parser.requests == []
 
 

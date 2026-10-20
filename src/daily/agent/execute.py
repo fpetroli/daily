@@ -6,7 +6,7 @@ their parameter names and return a typed outcome. They never reinterpret a value
 has already normalized dates, times and minutes, and the schema has validated them.
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from daily.agent.results import (
     Executed,
@@ -118,7 +118,11 @@ def _dispatch(repos: Repositories, call: ToolCall, today: str, now: datetime) ->
         case GetScheduleCall():
             day = call.date or today
             entries = get_schedule(repos, default_date=day, time_band=call.time_band, now=now)
-            return Executed(call, ScheduleView(day, call.time_band, tuple(entries)))
+            following = None
+            if entries and call.time_band is None:  # a whole day: how the next one starts
+                next_day = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+                following = next(iter(get_schedule(repos, default_date=next_day, now=now)), None)
+            return Executed(call, ScheduleView(day, call.time_band, tuple(entries), following))
         case GetFreeSlotsCall():
             day = call.date or today
             slots = get_free_slots(

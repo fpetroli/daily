@@ -24,7 +24,10 @@ async def test_a_json_tool_call_goes_through_the_whole_turn(repos):
 
     assert output.splitlines() == [
         "> Done: yoga tomorrow from 19:00 to 19:45.",
-        "> Tomorrow you have: yoga at 19:00.",
+        "> Tomorrow · Tuesday, September 22",
+        "",
+        "  yoga",
+        "  19:00 → 19:45 · 45 min",
     ]
 
 
@@ -71,7 +74,7 @@ def test_command_runs_from_the_terminal_with_an_in_memory_database():
         check=True,
     )
 
-    assert result.stdout == "> Today you have nothing planned.\n"
+    assert result.stdout == "> Today · Monday, September 21\n\n  Nothing planned.\n"
     assert "Simulated time: 2026-09-21 15:30" in result.stderr
 
 

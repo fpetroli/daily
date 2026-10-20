@@ -4,9 +4,12 @@ The token is part of every URL: nothing here logs a URL or an httpx exception te
 service lowers the `httpx` logger to warnings for the same reason.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
+
+from daily.agent.templates import Styled
 
 TELEGRAM_URL = "https://api.telegram.org"
 # Long polling: Telegram holds `getUpdates` open up to this many seconds when there is
@@ -67,10 +70,19 @@ class TelegramApi:
         )
 
     async def send_message(
-        self, chat_id: int, text: str, buttons: list[list[Button]] | None = None
+        self,
+        chat_id: int,
+        text: str,
+        buttons: list[list[Button]] | None = None,
+        styles: Sequence[Styled] = (),
     ) -> dict[str, Any]:
+        text = text[:MAX_TEXT]
         return await self._call(
-            "sendMessage", chat_id=chat_id, text=text[:MAX_TEXT], reply_markup=_keyboard(buttons)
+            "sendMessage",
+            chat_id=chat_id,
+            text=text,
+            entities=_entities(text, styles),
+            reply_markup=_keyboard(buttons),
         )
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
@@ -108,3 +120,25 @@ def _keyboard(buttons: list[list[Button]] | None) -> dict[str, Any] | None:
             [{"text": label, "callback_data": data} for label, data in row] for row in buttons
         ]
     }
+
+
+def _entities(text: str, styles: Sequence[Styled]) -> list[dict[str, Any]] | None:
+    """The styles as message entities, which Telegram measures in UTF-16 code units: no
+    markup in the text, so nothing in a title can break the message. A style cut off by the
+    length limit is shortened or dropped."""
+    entities = []
+    for styled in styles:
+        end = min(styled.end, len(text))
+        if styled.start < end:
+            entities.append(
+                {
+                    "type": styled.style,
+                    "offset": _utf16(text[: styled.start]),
+                    "length": _utf16(text[styled.start : end]),
+                }
+            )
+    return entities or None
+
+
+def _utf16(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2

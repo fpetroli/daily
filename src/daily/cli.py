@@ -65,7 +65,8 @@ async def run_chat(
             print(f"! {NO_MODEL}", file=out)
             continue
         result = await service.handle(message, now=now, timezone=timezone)
-        print(f"> {result.reply.text}", file=out)
+        first, *rest = result.reply.text.split("\n")  # a multi-line reply stays one block
+        print("\n".join([f"> {first}", *(f"  {line}" if line else "" for line in rest)]), file=out)
         if result.reply.quick_replies:
             print(f"  [{' | '.join(result.reply.quick_replies)}]", file=out)
 

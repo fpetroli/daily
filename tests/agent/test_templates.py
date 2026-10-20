@@ -375,42 +375,115 @@ def entry(title, start, end, done=False):
 
 
 def schedule(entries, day=TODAY, band=None):
-    return show({"tool": "get_schedule"}, ScheduleView(day, band, tuple(entries))).text
+    return show({"tool": "get_schedule"}, ScheduleView(day, band, tuple(entries)))
+
+
+def styled(reply: Reply) -> list[tuple[str, str]]:
+    return [(s.style, reply.text[s.start : s.end]) for s in reply.styles]
 
 
 def test_empty_schedule():
-    assert schedule([]) == "Today you have nothing planned."
-    assert schedule([], TOMORROW, TimeBand.EVENING) == (
-        "Tomorrow in the evening you have nothing planned."
+    assert schedule([]).text == "Today · Monday, September 21\n\nNothing planned."
+    assert schedule([], TOMORROW, TimeBand.EVENING).text == (
+        "Tomorrow in the evening · Tuesday, September 22\n\nNothing planned."
+    )
+    assert schedule([]).styles == ()
+
+
+def test_schedule_is_a_card_per_event_with_start_end_and_duration():
+    reply = schedule(
+        [
+            entry("dinner", "20:00", "21:00"),
+            entry("film", "21:30", "23:15"),
+            entry("tea", "23:30", "23:45"),
+        ]
     )
 
+    assert reply.text == (
+        "Today · Monday, September 21\n\n"
+        "dinner\n20:00 → 21:00 · 1 h\n\n"
+        "┄┄ 30 min ┄┄\n\n"
+        "film\n21:30 → 23:15 · 1 h 45 min\n\n"
+        "┄┄ 15 min ┄┄\n\n"
+        "tea\n23:30 → 23:45 · 15 min"
+    )
+    assert styled(reply) == [("bold", "dinner"), ("bold", "film"), ("bold", "tea")]
 
-def test_schedule_with_events_to_do():
-    text = schedule([entry("dinner", "20:00", "21:00"), entry("film", "21:30", "23:00")])
 
-    assert text == "Today you have: dinner at 20:00, film at 21:30."
-
-
-def test_schedule_tells_what_is_already_done():
-    text = schedule(
+def test_schedule_strikes_through_what_is_already_done():
+    reply = schedule(
         [entry("breakfast", "08:00", "08:30", done=True), entry("dinner", "20:00", "21:00")]
     )
 
-    assert text == (
-        "Today you have already done: breakfast at 08:00. Still to do: dinner at 20:00."
+    assert reply.text == (
+        "Today · Monday, September 21\n\n"
+        "breakfast\n08:00 → 08:30 · 30 min\n\n"
+        "┄┄ 11 h 30 min ┄┄\n\n"
+        "dinner\n20:00 → 21:00 · 1 h"
+    )
+    assert styled(reply) == [
+        ("bold", "breakfast"),
+        ("strikethrough", "breakfast"),
+        ("strikethrough", "08:00 → 08:30 · 30 min"),
+        ("bold", "dinner"),
+    ]
+
+
+def test_schedule_until_midnight_ends_at_24():
+    late = ScheduleEntry("e", "party", f"{TODAY}T22:00", f"{TOMORROW}T00:00")
+
+    assert schedule([late]).text.endswith("party\n22:00 → 24:00 · 2 h")
+
+
+def test_no_gap_line_between_touching_or_overlapping_events():
+    text = schedule(
+        [
+            entry("work", "09:00", "13:00"),
+            entry("lunch", "13:00", "14:00"),
+            entry("call", "13:30", "13:45"),  # inside lunch: the gap runs from 14:00
+            entry("walk", "14:01", "14:30"),
+        ]
+    ).text
+
+    assert text.count("┄┄") == 2 and "lunch\n13:00 → 14:00 · 1 h\n\ncall" in text
+    assert "call\n13:30 → 13:45 · 15 min\n\n┄┄ 1 min ┄┄\n\nwalk" in text
+
+
+def test_schedule_ends_with_the_gap_and_the_first_event_of_the_next_day():
+    first = ScheduleEntry("e", "breakfast", f"{TOMORROW}T07:30", f"{TOMORROW}T08:00")
+    view = ScheduleView(
+        TODAY,
+        None,
+        (entry("gym", "18:00", "19:00"), entry("call", "18:30", "19:30")),
+        first,
     )
 
+    reply = show({"tool": "get_schedule"}, view)
 
-def test_schedule_all_done():
-    text = schedule([entry("breakfast", "08:00", "08:30", done=True)])
+    assert reply.text == (
+        "Today · Monday, September 21\n\n"
+        "gym\n18:00 → 19:00 · 1 h\n\n"
+        "call\n18:30 → 19:30 · 1 h\n\n"
+        "──── 12 h ────\n\n"  # from the latest end, not from the last start
+        "Tomorrow · Tuesday, September 22\n\n"
+        "breakfast\n07:30 → 08:00 · 30 min"
+    )
+    assert styled(reply)[-1] == ("bold", "breakfast")
 
-    assert text == "Today you have already done everything: breakfast at 08:00."
+
+def test_no_gap_when_the_day_runs_into_the_next_event():
+    late = ScheduleEntry("e", "party", f"{TODAY}T23:00", f"{TOMORROW}T01:00")
+    first = ScheduleEntry("e", "sleep", f"{TOMORROW}T00:30", f"{TOMORROW}T07:00")
+
+    text = show({"tool": "get_schedule"}, ScheduleView(TODAY, None, (late,), first)).text
+
+    assert "\n\n────────────\n\nTomorrow · Tuesday, September 22\n\nsleep\n" in text
 
 
 def test_schedule_of_another_day_with_band():
-    text = schedule([entry("meeting", "15:00", "16:00")], "2026-09-24", TimeBand.AFTERNOON)
+    reply = schedule([entry("meeting", "15:00", "16:00")], "2026-09-24", TimeBand.AFTERNOON)
 
-    assert text == "Thursday, September 24 in the afternoon you have: meeting at 15:00."
+    assert reply.text == ("Thursday, September 24 in the afternoon\n\nmeeting\n15:00 → 16:00 · 1 h")
 
 
 def slots(items, band=None, minimum=None, day=TODAY):

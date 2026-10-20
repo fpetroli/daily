@@ -9,12 +9,12 @@
       - [dinner, "{today}T20:00", "{today}T21:00"]
   call: {tool: get_schedule}
   kind: schedule_view
-  reply_has: ["Today you have already done: breakfast at 08:00. Still to do: meeting at 16:00, dinner at 20:00."]
+  reply_has: ["breakfast\n08:00 → 08:30 · 30 min", "meeting\n16:00 → 17:00 · 1 h", "dinner\n20:00 → 21:00 · 1 h"]
 
 - id: reads-02
   say: "plan tomorrow"
   call: {tool: get_schedule, date: "{tomorrow}"}
-  reply_has: ["Tomorrow you have nothing planned."]
+  reply_has: ["Tomorrow · Tuesday, September 22\n\nNothing planned."]
 
 - id: reads-03
   say: "what do I have on thursday afternoon?"
@@ -23,13 +23,13 @@
       - [breakfast, "{thu}T08:00", "{thu}T08:30"]
       - [meeting, "{thu}T15:00", "{thu}T16:00"]
   call: {tool: get_schedule, date: "{thu}", time_band: afternoon}
-  reply_has: ["Thursday, September 24 in the afternoon you have: meeting at 15:00."]
+  reply_has: ["Thursday, September 24 in the afternoon\n\nmeeting\n15:00 → 16:00 · 1 h"]
 
 - id: reads-04
   say: "what's my plan for September 25?"
   split: holdout
   call: {tool: get_schedule, date: "2026-09-25"}
-  reply_has: ["Friday, September 25 you have nothing planned."]
+  reply_has: ["Friday, September 25\n\nNothing planned."]
 
 - id: reads-05
   say: "how much free time do I have in the afternoon?"
