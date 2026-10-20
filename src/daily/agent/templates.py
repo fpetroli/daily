@@ -558,34 +558,42 @@ def _rule_removed(call: RemoveEventRuleCall) -> str:
     return f"Done: I removed {what} of {title}."
 
 
-def rules_text(rules: list[EventRule], defaults: list[EventDefault]) -> str:
-    """What the schedule knows: relations between events, free slots and usual times."""
-    lines = []
+def rules_reply(rules: list[EventRule], defaults: list[EventDefault]) -> Reply:
+    """What the schedule knows, one card per event in alphabetical order: its usual time and
+    duration, the events that go right before or after it, the free time it keeps around."""
+    cards: dict[str, tuple[str, list[str]]] = {}  # by title, case-insensitive like the rules
+
+    def card(title: str) -> list[str]:
+        return cards.setdefault(title.lower(), (title, []))[1]
+
+    for default in defaults:
+        usual = [f"at {default.typical_start}"] if default.typical_start else []
+        if default.typical_duration_minutes:
+            usual.append(_duration(default.typical_duration_minutes))
+        if usual:
+            card(default.title).append("usually " + " · ".join(usual))
     for rule in rules:
-        related = _q(rule.related_title)
         where = "after" if rule.position == "after" else "before"
         if rule.is_gap:
-            lines.append(f"- {rule.gap_minutes} minutes free {where} {related}")
+            line = f"{_duration(rule.gap_minutes)} free {where}"
         elif rule.offset_minutes:
-            lines.append(
-                f"- {_q(rule.trigger_title)} {rule.offset_minutes} minutes {where} {related}"
-            )
+            line = f"{rule.trigger_title} {_duration(rule.offset_minutes)} {where}"
         else:
-            lines.append(f"- {_q(rule.trigger_title)} right {where} {related}")
-    for default in defaults:
-        parts = []
-        if default.typical_start:
-            parts.append(f"at {default.typical_start}")
-        if default.typical_duration_minutes:
-            parts.append(f"lasts {default.typical_duration_minutes} minutes")
-        if parts:
-            lines.append(f"- {_q(default.title)} usually " + " and ".join(parts))
-    if not lines:
-        return (
+            line = f"{rule.trigger_title} right {where}"
+        card(rule.related_title).append(line)
+    if not cards:
+        return Reply(
             "There are no rules yet. Teach me one by writing, for example: "
             '"the shower always goes after the gym".'
         )
-    return "Rules and usual times:\n" + "\n".join(lines)
+    out = _StyledText()
+    out.add("Rules and usual times")
+    for key in sorted(cards):
+        title, lines = cards[key]
+        out.add("\n\n")
+        out.add(title, "bold")
+        out.add("".join(f"\n{line}" for line in lines))
+    return out.reply()
 
 
 # --- undo ------------------------------------------------------------------------------

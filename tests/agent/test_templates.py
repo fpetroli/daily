@@ -15,7 +15,7 @@ from daily.agent.results import (
     ScheduleView,
 )
 from daily.agent.schemas import parse_tool_call
-from daily.agent.templates import Reply, day_label, render, rules_text, undone_text
+from daily.agent.templates import Reply, day_label, render, rules_reply, undone_text
 from daily.domain.models import EventDefault, EventRule
 from daily.domain.timeband import TimeBand
 from daily.services.habits import (
@@ -769,26 +769,34 @@ def test_a_no_after_a_question_is_a_plain_ok():
 # --- rules and undo (the bot's commands) ----------------------------------------------
 
 
-def test_rules_text_without_rules_explains_how_to_teach_one():
-    assert rules_text([], []).startswith("There are no rules yet.")
+def test_rules_without_rules_explains_how_to_teach_one():
+    reply = rules_reply([], [])
+
+    assert reply.text.startswith("There are no rules yet.") and reply.styles == ()
 
 
-def test_rules_text_lists_relations_gaps_and_usual_times():
+def test_rules_are_a_card_per_event_with_what_is_known_about_it():
     rules = [
         EventRule("r1", "shower", "gym", "after"),
         EventRule("r2", "stretching", "run", "before", offset_minutes=10),
         EventRule("r3", "break", "lunch", "after", gap_minutes=30),
+        EventRule("r4", "stretching", "Yoga", "before", offset_minutes=90),
     ]
     defaults = [EventDefault("yoga", "19:00", 45), EventDefault("meeting", None, 60)]
 
-    assert rules_text(rules, defaults) == (
-        "Rules and usual times:\n"
-        '- "shower" right after "gym"\n'
-        '- "stretching" 10 minutes before "run"\n'
-        '- 30 minutes free after "lunch"\n'
-        '- "yoga" usually at 19:00 and lasts 45 minutes\n'
-        '- "meeting" usually lasts 60 minutes'
+    reply = rules_reply(rules, defaults)
+
+    assert reply.text == (
+        "Rules and usual times\n\n"
+        "gym\nshower right after\n\n"
+        "lunch\n30 min free after\n\n"
+        "meeting\nusually 1 h\n\n"
+        "run\nstretching 10 min before\n\n"
+        "yoga\nusually at 19:00 · 45 min\nstretching 1 h 30 min before"
     )
+    assert styled(reply) == [
+        ("bold", title) for title in ("gym", "lunch", "meeting", "run", "yoga")
+    ]
 
 
 @pytest.mark.parametrize(

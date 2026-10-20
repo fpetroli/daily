@@ -299,7 +299,8 @@ async def test_rules_lists_what_was_taught(bot, api, repos):
 
     await bot.handle_update(message("/rules"))
 
-    assert api.texts == ['Rules and usual times:\n- "shower" right after "gym"']
+    assert api.texts == ["Rules and usual times\n\ngym\nshower right after"]
+    assert [s.style for s in api.styles[0]] == ["bold"]
 
 
 async def test_undo_command(bot, api, parser, repos):

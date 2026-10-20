@@ -25,7 +25,7 @@ import httpx
 from daily.agent.execute import execute
 from daily.agent.results import Executed, Execution
 from daily.agent.schemas import parse_tool_call
-from daily.agent.templates import Reply, Styled, render, rules_text, undone_text
+from daily.agent.templates import Reply, Styled, render, rules_reply, undone_text
 from daily.agent.turn import TurnService
 from daily.services.context import Repositories
 from daily.services.schedule import EventCreated, EventRemoved, EventUpdated
@@ -257,16 +257,15 @@ class Bot:
         name, _, args = text[1:].partition(" ")
         name = name.split("@", 1)[0].lower()  # "/today@my_bot" in the command menu
         args = args.strip()
+        reply: str | Reply
         match name:
             case "start" | "help":
                 reply = HELP
             case "today" | "tomorrow":
                 days = 1 if name == "tomorrow" else 0
-                schedule = self._schedule(now.date() + timedelta(days=days), now)
-                await self._api.send_message(chat_id, schedule.text, styles=schedule.styles)
-                return
+                reply = self._schedule(now.date() + timedelta(days=days), now)
             case "rules":
-                reply = rules_text(
+                reply = rules_reply(
                     self._repos.event_rules.get_all(), self._repos.event_defaults.list_all()
                 )
             case "undo":
@@ -278,7 +277,9 @@ class Bot:
                 reply = self._settings(args)
             case _:
                 reply = UNKNOWN_COMMAND
-        await self._api.send_message(chat_id, reply)
+        if isinstance(reply, str):
+            reply = Reply(reply)
+        await self._api.send_message(chat_id, reply.text, styles=reply.styles)
 
     def _schedule(self, day: date, now: datetime) -> Reply:
         """The same read as "what do I have today?", without the model."""
