@@ -52,6 +52,21 @@ async def test_a_silent_message_has_no_notification():
     assert "disable_notification" not in loud
 
 
+async def test_an_edit_keeps_bold_and_struck_through():
+    api, calls = recording_api({"ok": True, "result": True})
+
+    await api.edit_message_text(42, 7, "gym · done", [Styled("bold", 0, 3)])
+
+    [(path, body)] = calls
+    assert path == f"/bot{TOKEN}/editMessageText"
+    assert body == {
+        "chat_id": 42,
+        "message_id": 7,
+        "text": "gym · done",
+        "entities": [{"type": "bold", "offset": 0, "length": 3}],
+    }
+
+
 async def test_without_buttons_no_markup_and_long_texts_are_cut():
     api, calls = recording_api({"ok": True, "result": {"message_id": 5}})
 

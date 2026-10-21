@@ -642,12 +642,40 @@ def rules_reply(rules: list[EventRule], defaults: list[EventDefault]) -> Reply:
 
 
 def reminder_reply(events: list[ScheduleEvent], minutes: int) -> Reply:
-    """The events about to start: how long until they do, then their cards as in the
-    schedule."""
+    """The events about to start, two lines each with no empty line: the title in bold with
+    how long until it starts, then start, end and duration as in the schedule."""
+    left = f" in {minutes} minute" + ("" if minutes == 1 else "s")
     out = _StyledText()
-    out.add(f"In {minutes} minute" + ("" if minutes == 1 else "s"))
-    for event in events:
-        _card(out, ScheduleEntry(event.event_id, event.title, event.start, event.end))
+    for index, event in enumerate(events):
+        out.add("\n" if index else "")
+        out.add(event.title, "bold")
+        duration = _duration(minutes_between_iso(event.start, event.end))
+        out.add(f"{left}\n{_time_of(event.start)} → {_end_of(event.start, event.end)} · {duration}")
+    return out.reply()
+
+
+_BAR_CELLS = 12
+
+
+def countdown_reply(events: list[ScheduleEvent], now: datetime) -> Reply:
+    """The events in progress, three lines each with no empty line: the title in bold with the
+    time left, a bar of the time gone with its percentage, the end time. An event already over
+    is one line: the title struck through, done and its end time."""
+    now_iso = now.isoformat(timespec="minutes")
+    out = _StyledText()
+    for index, event in enumerate(events):
+        out.add("\n" if index else "")
+        if event.end <= now_iso:
+            out.add(event.title, "bold", "strikethrough")
+            out.add(f" · done at {_end_of(event.start, event.end)}")
+            continue
+        total = minutes_between_iso(event.start, event.end)
+        gone = max(0, minutes_between_iso(event.start, now_iso))
+        filled = round(_BAR_CELLS * gone / total)
+        bar = "▓" * filled + "░" * (_BAR_CELLS - filled)
+        out.add(event.title, "bold")
+        out.add(f" · {_duration(total - gone)} left\n{bar} {gone * 100 // total}%")
+        out.add(f"\nends at {_end_of(event.start, event.end)}")
     return out.reply()
 
 

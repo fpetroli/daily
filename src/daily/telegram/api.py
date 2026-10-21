@@ -89,10 +89,17 @@ class TelegramApi:
             disable_notification=silent or None,
         )
 
-    async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
+    async def edit_message_text(
+        self, chat_id: int, message_id: int, text: str, styles: Sequence[Styled] = ()
+    ) -> None:
         """Replaces the text and, with it, removes the buttons."""
+        text = text[:MAX_TEXT]
         await self._call(
-            "editMessageText", chat_id=chat_id, message_id=message_id, text=text[:MAX_TEXT]
+            "editMessageText",
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            entities=_entities(text, styles),
         )
 
     async def remove_buttons(self, chat_id: int, message_id: int) -> None:
