@@ -41,13 +41,15 @@ class RuleProposal:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleEntry:
-    """Row of a day's schedule; `done` is derived (the event is already over)."""
+    """Row of a day's schedule; `done` and `started` are derived (the event is already over,
+    it has already begun)."""
 
     event_id: str
     title: str
     start: str
     end: str
     done: bool = False
+    started: bool = False
 
 
 @dataclass(frozen=True, slots=True)

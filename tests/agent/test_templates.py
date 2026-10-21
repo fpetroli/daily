@@ -382,8 +382,9 @@ def test_overlap():
 # --- reads -----------------------------------------------------------------------------
 
 
-def entry(title, start, end, done=False):
-    return ScheduleEntry("e", title, f"{TODAY}T{start}", f"{TODAY}T{end}", done)
+def entry(title, start, end, done=False, started=None):
+    started = done if started is None else started
+    return ScheduleEntry("e", title, f"{TODAY}T{start}", f"{TODAY}T{end}", done, started)
 
 
 def schedule(entries, day=TODAY, band=None):
@@ -439,6 +440,21 @@ def test_schedule_strikes_through_what_is_already_done():
         ("strikethrough", "08:00 → 08:30 · 30 min"),
         ("bold", "dinner"),
     ]
+
+
+def test_the_free_time_is_struck_through_once_the_next_event_began():
+    reply = schedule(
+        [
+            entry("work", "09:00", "18:00", done=True),
+            entry("gym", "18:30", "20:00", started=True),
+            entry("dinner", "21:00", "22:00"),
+        ]
+    )
+
+    assert "┄┄ 30 min ┄┄" in reply.text
+    assert "┄┄ 1 h ┄┄" in reply.text
+    assert ("strikethrough", "30 min") in styled(reply)
+    assert ("strikethrough", "1 h") not in styled(reply)
 
 
 def test_schedule_until_midnight_ends_at_24():

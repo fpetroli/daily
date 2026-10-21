@@ -485,8 +485,9 @@ class _StyledText:
 def _schedule_reply(view: ScheduleView, today: date) -> Reply:
     """A header with the day, then one card per event: the title in bold, then start, end and
     duration; the events already over are struck through. A light line tells the free time
-    between two events; a whole day ends with how much time passes until the first event of
-    the next day, and that event. Gaps run from the latest end so far: overlaps have none."""
+    between two events, struck through once the next event has begun; a whole day ends with
+    how much time passes until the first event of the next day, and that event. Gaps run from
+    the latest end so far: overlaps have none."""
     out = _StyledText()
     out.add(_day_header(view.date, view.time_band, today))
     if not view.entries:
@@ -494,7 +495,9 @@ def _schedule_reply(view: ScheduleView, today: date) -> Reply:
     latest_end = None
     for entry in view.entries:
         if latest_end is not None and (gap := minutes_between_iso(latest_end, entry.start)) > 0:
-            out.add(f"\n\n┄┄ {_duration(gap)} ┄┄")
+            out.add("\n\n┄┄ ")
+            out.add(_duration(gap), *(("strikethrough",) if entry.started else ()))
+            out.add(" ┄┄")
         _card(out, entry)
         latest_end = max(latest_end or entry.end, entry.end)
     if view.following is not None and latest_end is not None:

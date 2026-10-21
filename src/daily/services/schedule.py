@@ -448,10 +448,13 @@ def get_schedule(
     time_band: TimeBand | None = None,
     now: datetime | None = None,
 ) -> list[ScheduleEntry]:
-    """Schedule of one day. `done` is derived: the event is already over relative to `now`."""
+    """Schedule of one day. `done` and `started` are derived: the event is already over, or
+    has already begun, relative to `now`."""
     now_iso = now_iso_string(now)
     entries = [
-        ScheduleEntry(e.event_id, e.title, e.start, e.end, done=e.end <= now_iso)
+        ScheduleEntry(
+            e.event_id, e.title, e.start, e.end, done=e.end <= now_iso, started=e.start <= now_iso
+        )
         for e in repos.schedule.events_for_date(date or default_date)
     ]
     return filter_by_band(entries, time_band) if time_band else entries

@@ -176,10 +176,10 @@ def test_done_is_derived_from_the_current_time(repos):
 
     entries = get_schedule(repos, default_date=DAY, now=NOW)  # NOW = 12:00
 
-    assert [(e.title, e.done) for e in entries] == [
-        ("morning", True),
-        ("in corso", False),
-        ("evening", False),
+    assert [(e.title, e.done, e.started) for e in entries] == [
+        ("morning", True, True),
+        ("in corso", False, True),
+        ("evening", False, False),
     ]
 
 
