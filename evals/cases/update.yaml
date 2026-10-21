@@ -135,3 +135,11 @@
   call: {tool: update_event, event_description: lunch, new_time: "10:30"}
   moved: [[[lunch, "{today}T13:00", "{today}T14:00"], [lunch, "{today}T10:30", "{today}T11:30"]]]
   reply_has: ["Warning: it overlaps with meeting (10:00-11:00)"]
+
+# From the reports of real use (2026-10): the event is not today and the day is not said.
+- id: update-19
+  say: "move breakfast 45 minutes earlier"
+  seed: {events: [[breakfast, "{tomorrow}T08:30", "{tomorrow}T09:00"]]}
+  call: {tool: update_event, event_description: breakfast, shift_minutes: -45}
+  moved: [[[breakfast, "{tomorrow}T08:30", "{tomorrow}T09:00"], [breakfast, "{tomorrow}T07:45", "{tomorrow}T08:15"]]]
+  reply_has: ["tomorrow"]

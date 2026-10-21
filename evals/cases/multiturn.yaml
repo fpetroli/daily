@@ -67,7 +67,7 @@
     defaults: [[shower, null, 15]]
   turns:
     - {say: "add gym at 6 pm for an hour", call: {tool: add_event, title: gym, time: "18:00", duration_minutes: 60}}
-    - {say: "no thanks", call: {tool: none}, kind: no_action, reply_has: ["Ok."]}
+    - {say: "no thanks", call: {tool: none}, kind: no_action, reply_has: ["Ok, I changed nothing"]}
   added: [[gym, "{today}T18:00", "{today}T19:00"]]
 
 - id: multiturn-09
@@ -183,11 +183,16 @@
   added: [[shower, "{today}T18:00", "{today}T18:20"]]
 
 - id: multiturn-22
-  seed: {events: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]}
+  seed:
+    events:
+      - [gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]
+      - [gym, "{day_after_tomorrow}T18:00", "{day_after_tomorrow}T19:00"]
   turns:
-    - {say: "delete the gym", call: {tool: remove_event, event_description: gym}, kind: event_not_found}
-    - {say: "I mean tomorrow's", call: {tool: remove_event, event_description: gym, event_date: "{tomorrow}"}, kind: event_removed}
-  removed: [[gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]]
+    - {say: "delete the gym", call: {tool: remove_event, event_description: gym}, kind: event_removed, reply_has: ["tomorrow"]}
+    - {say: "the one of the day after tomorrow too", call: {tool: remove_event, event_description: gym, event_date: "{day_after_tomorrow}"}, kind: event_removed}
+  removed:
+    - [gym, "{tomorrow}T18:00", "{tomorrow}T19:00"]
+    - [gym, "{day_after_tomorrow}T18:00", "{day_after_tomorrow}T19:00"]
 
 - id: multiturn-23
   turns:
@@ -209,3 +214,86 @@
     - {say: "dentist", call: {tool: add_event, title: dentist}, kind: insufficient_info}
     - {say: "tomorrow at 10 for an hour", call: {tool: add_event, title: dentist, date: "{tomorrow}", time: "10:00", duration_minutes: 60}, kind: event_created}
   added: [[dentist, "{tomorrow}T10:00", "{tomorrow}T11:00"]]
+
+# From the reports of real use (2026-09 and 2026-10): the recent conversation is about
+# something else and the new message is a request of its own. The model must not copy the
+# previous action, title or minutes.
+- id: multiturn-26
+  turns:
+    - {say: "after the gym I always have breakfast", call: {tool: add_event_rule, trigger_title: breakfast, related_title: gym, position: after}, kind: add_event_rule_success}
+    - {say: "add the gym tomorrow at 7 for an hour and a half", call: {tool: add_event, title: gym, date: "{tomorrow}", time: "07:00", duration_minutes: 90}, kind: event_created}
+  rules_added: [[breakfast, gym]]
+  added: [[gym, "{tomorrow}T07:00", "{tomorrow}T08:30"]]
+
+- id: multiturn-27
+  turns:
+    - {say: "work is always from 9 to 6 pm", call: {tool: add_event_rule, trigger_title: work, typical_start: "09:00", typical_duration_minutes: 540}, kind: add_event_rule_success}
+    - {say: "add work tomorrow", call: {tool: add_event, title: work, date: "{tomorrow}"}, kind: event_created}
+  defaults: {work: ["09:00", 540]}
+  added: [[work, "{tomorrow}T09:00", "{tomorrow}T18:00"]]
+
+- id: multiturn-28
+  seed: {rules: [[shower, gym, after, 0]]}
+  turns:
+    - {say: "delete the rule", call: {tool: remove_event_rule}, kind: missing_field:trigger_title}
+    - {say: "dinner is always at 8 pm", call: {tool: add_event_rule, trigger_title: dinner, typical_start: "20:00"}, kind: add_event_rule_success}
+  defaults: {dinner: ["20:00", null]}
+
+- id: multiturn-29
+  turns:
+    - {say: "dinner tonight from 7:30 to 8:30 pm", call: {tool: add_event, title: dinner, time: "19:30", end_time: "20:30"}, kind: event_created}
+    - {say: "bedtime at 9 pm for half an hour", call: {tool: add_event, title: bedtime, time: "21:00", duration_minutes: 30}, kind: event_created}
+  added:
+    - [dinner, "{today}T19:30", "{today}T20:30"]
+    - [bedtime, "{today}T21:00", "{today}T21:30"]
+
+- id: multiturn-30
+  seed: {events: [[shower, "{today}T19:00", "{today}T19:30"]]}
+  turns:
+    - {say: "add dinner after the shower", call: {tool: add_event_relative, title: dinner, anchor_description: shower, position: after}, kind: missing_field:duration_minutes}
+    - {say: "it lasts an hour", call: {tool: add_event_relative, title: dinner, anchor_description: shower, position: after, duration_minutes: 60}, kind: event_created}
+  added: [[dinner, "{today}T19:30", "{today}T20:30"]]
+
+- id: multiturn-31
+  turns:
+    - {say: "breakfast always goes 30 minutes before work", call: {tool: add_event_rule, trigger_title: breakfast, related_title: work, position: before, offset_minutes: 30}, kind: add_event_rule_success}
+    - {say: "lunch usually lasts 45 minutes", call: {tool: add_event_rule, trigger_title: lunch, typical_duration_minutes: 45}, kind: add_event_rule_success}
+  rules_added: [[breakfast, work]]
+  defaults: {lunch: [null, 45]}
+
+- id: multiturn-32
+  split: holdout
+  seed:
+    rules: [[breakfast, work, before, 0]]
+    events: [[work, "{tomorrow}T09:00", "{tomorrow}T18:00"]]
+  turns:
+    - {say: "add breakfast tomorrow", call: {tool: add_event, title: breakfast, date: "{tomorrow}"}, kind: needs_duration_confirmation}
+    - {say: "30 minutes", call: {tool: add_event, title: breakfast, date: "{tomorrow}", duration_minutes: 30}, kind: event_created}
+  added: [[breakfast, "{tomorrow}T08:30", "{tomorrow}T09:00"]]
+
+- id: multiturn-33
+  split: holdout
+  turns:
+    - {say: "the walk always goes after lunch", call: {tool: add_event_rule, trigger_title: walk, related_title: lunch, position: after}, kind: add_event_rule_success}
+    - {say: "add the dentist on friday at 4 pm", call: {tool: add_event, title: dentist, date: "{fri}", time: "16:00"}, kind: insufficient_info}
+  rules_added: [[walk, lunch]]
+
+# From the reports of real use (2026-10): a rule in the history does not turn the next
+# "add X after Y" into a rule, and a removal in the history does not turn a new rule into a
+# removal.
+- id: multiturn-34
+  seed:
+    events: [[gym, "{today}T18:30", "{today}T20:00"]]
+    defaults: [[shower, null, 30]]
+  turns:
+    - {say: "the shower always goes after the gym", call: {tool: add_event_rule, trigger_title: shower, related_title: gym, position: after}, kind: add_event_rule_success}
+    - {say: "add the shower after the gym", call: {tool: add_event_relative, title: shower, anchor_description: gym, position: after}, kind: event_created}
+  rules_added: [[shower, gym]]
+  added: [[shower, "{today}T20:00", "{today}T20:30"]]
+
+- id: multiturn-35
+  seed: {rules: [[breakfast, wake-up, before, 0]]}
+  turns:
+    - {say: "remove the rule where breakfast is right before wake-up", call: {tool: remove_event_rule, trigger_title: breakfast, related_title: wake-up}, kind: remove_event_rule_success}
+    - {say: "usually breakfast is after wake-up", call: {tool: add_event_rule, trigger_title: breakfast, related_title: wake-up, position: after}, kind: add_event_rule_success}
+  # The same pair as in the seed, now "after": the rules at the end are the seed's again.

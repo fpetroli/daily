@@ -1,4 +1,4 @@
-"""Terminal command: `python -m daily.cli chat`.
+"""Terminal commands: `python -m daily.cli chat`, `reports`, `assign` and `handle`.
 
 It tries the whole turn (parse → execute → respond) without Telegram. Without a model
 (`--llm-url`) the "model" is you: a line starting with `{` is a tool call in JSON, as the
@@ -7,6 +7,10 @@ history as the real turn. Other lines get a warning.
 
 By default the database is in memory (lost at the end of the session); `--db` uses a file.
 It never touches the installed service's data, unless told to.
+
+`reports` lists the reports (`/report`) still open, `assign` says where the fix of an open one
+will go (it stays open), `handle` closes one once it is fixed, saying where. A report has no
+expiry: it is open until it is fixed. They need `--db`.
 """
 
 import argparse
@@ -23,6 +27,7 @@ from daily.config import Settings
 from daily.llm.parser import LlamaServerParser
 from daily.services.context import Repositories
 from daily.storage.db import MEMORY, open_database
+from daily.storage.turn_log_repo import OUTCOMES, AmbiguousTurnId, Report
 
 NO_MODEL = 'No model connected: write the tool call in JSON, for example {"tool": "get_schedule"}.'
 
@@ -97,6 +102,23 @@ async def _run(args: argparse.Namespace, repos: Repositories, now: datetime) -> 
             await llama.aclose()
 
 
+def print_reports(reports: list[Report], out: TextIO) -> None:
+    """One block per report: short id, time, outcome kind, the exchange and the note."""
+    if not reports:
+        print("No open reports.", file=out)
+        return
+    for report in reports:
+        if report.handled_at:
+            state = f"  [fixed {report.handled_at} · {report.outcome}]"
+        else:
+            state = f"  [to fix → {report.outcome}]" if report.outcome else ""
+        print(f"{report.turn_id[:8]}  {report.created_at}  {report.kind}{state}", file=out)
+        print(f"  You:  {report.message}", file=out)
+        print(f"  Bot:  {report.reply_text}", file=out)
+        print(f"  Note: {report.note or '(none)'}", file=out)
+        print("", file=out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m daily.cli")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -119,7 +141,39 @@ def main(argv: list[str] | None = None) -> int:
         help="prompt shape: 'classic' for E4B, 'turns' for E2B (default: the one in "
         "Settings/DAILY_LLM_PROMPT_STYLE). Requires --llm-url.",
     )
+    reports = commands.add_parser("reports", help="list the reports still to handle")
+    reports.add_argument("--db", required=True, help="SQLite file")
+    reports.add_argument("--all", action="store_true", help="also the fixed ones")
+    reports.add_argument("--outcome", choices=OUTCOMES, help="only those going there")
+    for name, help_ in (
+        ("assign", "say where the fix of an open report will go (it stays open)"),
+        ("handle", "close a report once it is fixed, saying where"),
+    ):
+        command = commands.add_parser(name, help=help_)
+        command.add_argument("--db", required=True, help="SQLite file")
+        command.add_argument("turn_id", help="the id of the reported turn, or its first characters")
+        command.add_argument("outcome", choices=OUTCOMES, help="where the fix goes")
     args = parser.parse_args(argv)
+
+    if args.command == "reports":
+        repos = Repositories.from_connection(open_database(args.db))
+        listed = repos.turn_log.reports(include_handled=args.all, outcome=args.outcome)
+        print_reports(listed, sys.stdout)
+        return 0
+    if args.command in ("assign", "handle"):
+        repos = Repositories.from_connection(open_database(args.db))
+        change = repos.turn_log.handle if args.command == "handle" else repos.turn_log.assign
+        try:
+            changed = change(args.turn_id, args.outcome)
+        except AmbiguousTurnId:
+            print(f"More than one report starts with {args.turn_id}: write more of it.")
+            return 1
+        if changed is None:
+            print(f"No report starts with {args.turn_id}.")
+            return 1
+        state = "fixed" if args.command == "handle" else "to fix"
+        print(f"{changed}: {state} → {args.outcome}.")
+        return 0
 
     now = datetime.strptime(args.now, "%Y-%m-%dT%H:%M") if args.now else datetime.now()
     repos = Repositories.from_connection(open_database(args.db))

@@ -17,6 +17,7 @@ from daily.agent.results import Executed, ExecutionError
 from daily.agent.templates import Reply
 from daily.agent.turn import TurnService
 from daily.domain.patterns import NoteStatus
+from daily.services.rules import UsualTimes
 from daily.services.schedule import EventCreated
 from scripted import ScriptedParser
 from turn_log import read_turn
@@ -415,7 +416,7 @@ async def test_no_to_a_suggestion_rejects_it_forever(repos, parser, turn):
     assert [row["status"] for row in rows] == [NoteStatus.REJECTED.value]
 
 
-async def test_recurring_gap_is_saved_by_saying_the_name(repos, parser, turn):
+def record_three_gaps(repos):
     for day in (1, 2, 3):
         repos.gap_patterns.record_occurrence(
             related_title="work",
@@ -424,6 +425,10 @@ async def test_recurring_gap_is_saved_by_saying_the_name(repos, parser, turn):
             time_tolerance_minutes=15,
             now=NOW.replace(day=day),
         )
+
+
+async def test_recurring_gap_is_saved_with_a_plain_yes(repos, parser, turn):
+    record_three_gaps(repos)
     parser.then({"tool": "get_schedule"})  # a read does not append the proposal
     parser.then({"tool": "add_event", "title": "reading", "time": "21:00", "duration_minutes": 30})
     assert "I noticed" not in (await say(turn, "what do I have today?")).reply.text
@@ -432,23 +437,92 @@ async def test_recurring_gap_is_saved_by_saying_the_name(repos, parser, turn):
 
     def model(request):
         gap = re.search(r'about (\d+) minutes free after "(.+?)"', last_reply(request))
-        assert gap and request.message == "break"
+        assert gap and request.message == "yes"
         return {
             "tool": "add_event_rule",
-            "trigger_title": request.message,
             "related_title": gap[2],
             "position": "after",
             "gap_minutes": int(gap[1]),
         }
 
     parser.answer_with(model)
-    saved = await say(turn, "break")
+    saved = await say(turn, "yes")
 
-    assert proposal.reply.quick_replies == ("No",)
+    assert proposal.reply.quick_replies == ("Yes", "No")
     assert saved.reply.text == 'Done: after "work" I will always leave a 30-minute gap.'
     [rule] = repos.event_rules.get_all()
-    assert (rule.trigger_title, rule.related_title, rule.gap_minutes) == ("break", "work", 30)
+    assert (rule.trigger_title, rule.related_title, rule.gap_minutes) == ("free time", "work", 30)
     assert repos.gap_patterns.list_pending() == []
+
+
+async def test_a_proposal_let_pass_is_not_appended_again(repos, parser, turn):
+    await three_yoga(turn, parser)
+    parser.then(create_yoga("2026-09-25"), {"tool": "dismiss_habit"})
+
+    later = await say(turn, "add yoga at 7 pm")
+    no = await say(turn, "no")
+
+    assert "I noticed" not in later.reply.text
+    assert no.reply.text == "There was no suggestion to reject."  # it was not the last reply
+    assert len(repos.event_patterns.list_pending()) == 1  # still pending, for later
+
+
+# --- buttons that skip the model -------------------------------------------------------
+
+
+async def test_the_yes_button_saves_the_proposal_without_the_model(repos, parser, turn):
+    *_, third = await three_yoga(turn, parser)
+    yes = third.reply.choices[third.reply.quick_replies.index("Yes")]
+
+    chosen = await turn.choose(yes, "Yes", now=NOW)
+
+    assert parser.requests[-1].message == "add yoga at 7 pm"  # the model was not asked
+    assert chosen.reply.text == 'Done: "yoga" usually is at 19:00 and lasts 45 minutes.'
+    assert repos.event_patterns.list_pending() == []
+    row = read_turn(repos.conn, chosen.turn_id)
+    assert (row.message, row.tool, row.kind) == ("Yes", "add_event_rule", "add_event_rule_success")
+
+
+async def test_the_no_button_rejects_the_proposal_shown(repos, parser, turn):
+    *_, third = await three_yoga(turn, parser)
+    no = third.reply.choices[third.reply.quick_replies.index("No")]
+
+    chosen = await turn.choose(no, "No", now=NOW)
+
+    assert chosen.reply.text == "Ok, I won't suggest it again."
+    rows = repos.conn.execute("SELECT status FROM event_patterns").fetchall()
+    assert [row["status"] for row in rows] == [NoteStatus.REJECTED.value]
+
+
+async def test_a_rule_button_removes_exactly_that_rule(repos, parser, turn):
+    repos.event_defaults.upsert("gym", typical_start="07:00", typical_duration_minutes=90)
+    repos.event_rules.insert_rule(
+        trigger_title="gym", related_title="breakfast", position="before", offset_minutes=0
+    )
+    parser.then({"tool": "remove_event_rule", "trigger_title": "gym"})
+    asked = await say(turn, "remove the gym rule")
+    label = 'The rule "gym right before breakfast"'
+
+    chosen = await turn.choose(
+        asked.reply.choices[asked.reply.quick_replies.index(label)], label, now=NOW
+    )
+
+    assert chosen.reply.text == 'Done: I removed the rule "gym right before breakfast".'
+    assert repos.event_rules.get_all() == []
+    assert repos.event_defaults.get_by_title("gym") is not None
+    row = read_turn(repos.conn, chosen.turn_id)
+    assert (row.message, row.kind) == (label, "remove_event_rule_success")
+
+
+async def test_a_failing_choice_answers_anyway(repos, parser, turn, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("daily.agent.turn.remove_rule_target", broken)
+
+    chosen = await turn.choose(UsualTimes("gym"), "Gym", now=NOW)
+
+    assert chosen.reply.text == "Something went wrong: try again."
 
 
 # --- errors: no exception crosses the steps --------------------------------------------
@@ -697,6 +771,6 @@ async def test_a_no_to_a_proposal_gets_ok_but_not_when_cold(repos, parser, turn)
     declined = await say(turn, "no thanks")
     cold = await say(turn, "no thanks")
 
-    assert declined.reply == Reply("Ok.")
+    assert declined.reply.text.startswith("Ok, I changed nothing.")
     assert cold.reply.text.startswith("I didn't understand what to do")
     assert titles_on(repos, TODAY) == ["gym"]

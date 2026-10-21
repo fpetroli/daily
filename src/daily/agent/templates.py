@@ -5,7 +5,8 @@ of everything the user can confirm, because the model interprets the answer ("ye
 second one", "at 6 pm") by reading the recent history (up to 3 exchanges; still, a
 well-written question must not rely on more than one step). Proposals have the Yes/No quick
 replies, and `expects_reply` tells the workflow whether the last reply is waiting for an
-answer from the user (used for "Ok."/"no action" after a "no").
+answer from the user (used for "no action" after a "no"). `choices` are what some buttons do
+without the model: a habit proposal's Yes and No, the choice among rules to remove.
 
 It never raises: an outcome it does not know becomes a generic message.
 """
@@ -17,6 +18,7 @@ from typing import Literal
 from daily.agent.parser import ParseFailure
 from daily.agent.prompts import WEEKDAYS
 from daily.agent.results import (
+    Choice,
     Executed,
     ExecutionError,
     FreeSlotsView,
@@ -31,7 +33,7 @@ from daily.agent.schemas import (
     AddEventRelativeCall,
     AddEventRuleCall,
     CheckOverlapCall,
-    RemoveEventRuleCall,
+    DismissHabitCall,
 )
 from daily.domain.models import EventDefault, EventRule
 from daily.domain.timeutil import add_minutes_to_iso, combine_date_and_time, minutes_between_iso
@@ -43,6 +45,7 @@ from daily.services.habits import (
 )
 from daily.services.relative import AnchorAmbiguous, AnchorNotFound, RelativeNeedsInfo
 from daily.services.rules import (
+    GAP_TITLE,
     AddEventRuleInvalidFormat,
     AddEventRuleNeedsInfo,
     AddEventRuleNeedsPosition,
@@ -50,8 +53,12 @@ from daily.services.rules import (
     RemoveEventRuleAmbiguous,
     RemoveEventRuleNotFound,
     RemoveEventRuleSuccess,
+    RuleTarget,
+    SavedGap,
+    UsualTimes,
 )
 from daily.services.schedule import (
+    EventAlreadyThere,
     EventAmbiguous,
     EventCreated,
     EventNotFound,
@@ -89,7 +96,10 @@ NOT_UNDERSTOOD = (
     "I didn't understand what to do. I can add, move or delete events, tell you what is on your "
     "schedule and find free slots."
 )
-ACKNOWLEDGED = "Ok."
+ACKNOWLEDGED = (
+    "Ok, I changed nothing. If you meant something else, write the whole request, for example "
+    '"move the gym tomorrow 30 minutes earlier".'
+)
 REPHRASE = "I didn't understand, can you rephrase?"
 MODEL_DOWN = "The model is not answering: try again shortly."
 WENT_WRONG = "Something went wrong: try again."
@@ -116,12 +126,14 @@ class Styled:
 @dataclass(frozen=True, slots=True)
 class Reply:
     """The reply of a turn. `quick_replies` are the texts sent as the user's answer when
-    tapped."""
+    tapped; when `choices` is not empty it goes with them, one per quick reply, and a tapped
+    quick reply with a choice runs that choice instead of being read by the model."""
 
     text: str
     quick_replies: tuple[str, ...] = ()
     expects_reply: bool = False
     styles: tuple[Styled, ...] = ()
+    choices: tuple[Choice | None, ...] = ()
 
 
 def render(execution: object, now: datetime) -> Reply:
@@ -234,7 +246,12 @@ def _with_habit(reply: Reply, habit: HabitProposal | None) -> Reply:
     if habit is None:
         return reply
     proposal = _habit(habit)
-    return Reply(f"{reply.text} {proposal.text}", proposal.quick_replies, expects_reply=True)
+    return Reply(
+        f"{reply.text} {proposal.text}",
+        proposal.quick_replies,
+        expects_reply=True,
+        choices=proposal.choices,
+    )
 
 
 def _render_outcome(executed: Executed, today: date) -> Reply:
@@ -242,6 +259,11 @@ def _render_outcome(executed: Executed, today: date) -> Reply:
     match outcome:
         case EventCreated():
             return _created(outcome, today)
+        case EventAlreadyThere(title=title, start=start, end=end):
+            return Reply(
+                f"{_q(title)} is already in your schedule {_on(_date_of(start), today)} "
+                f"{_span(start, end)}: I didn't add it again."
+            )
         case InvalidRange():
             return Reply(
                 "That time is not valid: the end must come after the start.", expects_reply=True
@@ -306,6 +328,8 @@ def _render_outcome(executed: Executed, today: date) -> Reply:
             return _schedule_reply(outcome, today)
         case FreeSlotsView():
             return Reply(_free_slots_text(outcome, today))
+        case AddEventRuleSuccess(gap=SavedGap() as gap):
+            return Reply(_gap_added(gap.related_title, gap.position, gap.gap_minutes))
         case AddEventRuleSuccess() if isinstance(call, AddEventRuleCall):
             return Reply(_rule_added(call))
         case AddEventRuleNeedsPosition():
@@ -325,19 +349,17 @@ def _render_outcome(executed: Executed, today: date) -> Reply:
                 "a duration or a rule relative to another event?",
                 expects_reply=True,
             )
-        case RemoveEventRuleSuccess() if isinstance(call, RemoveEventRuleCall):
-            return Reply(_rule_removed(call))
+        case RemoveEventRuleSuccess(removed=removed):
+            return Reply(f"Done: I removed {_target(removed)}.")
         case RemoveEventRuleNotFound():
             return Reply("I can't find any matching rule.")
         case RemoveEventRuleAmbiguous(candidates=candidates):
-            listing = ", ".join(
-                f"{i}) {c.trigger_title} relative to {c.related_title}"
-                for i, c in enumerate(candidates, start=1)
-            )
+            listing = ", ".join(f"{i}) {_target(c)}" for i, c in enumerate(candidates, start=1))
             return Reply(
-                f"I found several rules: {listing}. Which one do you mean?",
-                tuple(f"{c.trigger_title} relative to {c.related_title}" for c in candidates),
+                f"I found several: {listing}. Which one do you want to remove?",
+                tuple(_capfirst(_target(c)) for c in candidates),
                 expects_reply=True,
+                choices=candidates,
             )
         case HabitDismissed(proposal=None):
             return Reply("There was no suggestion to reject.")
@@ -536,8 +558,7 @@ def _rule_added(call: AddEventRuleCall) -> str:
         return f"Done: {title} usually " + " and ".join(parts) + "."
     related = _q(call.related_title)
     if call.gap_minutes is not None:
-        where = "after" if call.position == "after" else "before"
-        return f"Done: {where} {related} I will always leave a {call.gap_minutes}-minute gap."
+        return _gap_added(call.related_title, call.position, call.gap_minutes)
     if call.position == "after":
         offset = (
             f", {call.offset_minutes} minutes after" if call.offset_minutes else ", right after"
@@ -547,15 +568,33 @@ def _rule_added(call: AddEventRuleCall) -> str:
     return f"Done: {title} always goes before {related}{offset}."
 
 
-def _rule_removed(call: RemoveEventRuleCall) -> str:
-    title = _q(call.trigger_title or "?")
-    if call.related_title:
-        return f"Done: I removed the rule of {title} relative to {_q(call.related_title)}."
-    what = {
-        "typical_start": "the usual time",
-        "typical_duration_minutes": "the usual duration",
-    }.get(call.field or "", "the usual time and duration")
-    return f"Done: I removed {what} of {title}."
+def _gap_added(related_title: str, position: str | None, gap_minutes: int) -> str:
+    where = "after" if position == "after" else "before"
+    return f"Done: {where} {_q(related_title)} I will always leave a {gap_minutes}-minute gap."
+
+
+def _target(target: RuleTarget) -> str:
+    """A rule or a usual time, as a thing that can be removed."""
+    match target:
+        case UsualTimes(title=title, field=field):
+            what = {
+                "typical_start": "the usual time",
+                "typical_duration_minutes": "the usual duration",
+            }.get(field or "", "the usual time and duration")
+            return f"{what} of {_q(title)}"
+        case EventRule() as rule:
+            return f"the rule {_q(_rule_phrase(rule))}"
+    raise AssertionError(f"Unhandled target: {target!r}")
+
+
+def _rule_phrase(rule: EventRule) -> str:
+    """A rule in a few words, as `/rules` writes it under its event."""
+    where = "after" if rule.position == "after" else "before"
+    if rule.is_gap:
+        return f"{_duration(rule.gap_minutes or 0)} free {where} {rule.related_title}"
+    if rule.offset_minutes:
+        return f"{rule.trigger_title} {_duration(rule.offset_minutes)} {where} {rule.related_title}"
+    return f"{rule.trigger_title} right {where} {rule.related_title}"
 
 
 def rules_reply(rules: list[EventRule], defaults: list[EventDefault]) -> Reply:
@@ -620,6 +659,7 @@ def _habit(habit: HabitProposal) -> Reply:
                 f"({habit.typical_duration_minutes} minutes): shall I save it as a usual time?",
                 YES_NO,
                 expects_reply=True,
+                choices=_habit_choices(habit),
             )
         case SequencePatternProposal():
             gap = (
@@ -632,17 +672,47 @@ def _habit(habit: HabitProposal) -> Reply:
                 "shall I save it as a rule?",
                 YES_NO,
                 expects_reply=True,
+                choices=_habit_choices(habit),
             )
         case GapPatternProposal():
             where = "after" if habit.position == "after" else "before"
             return Reply(
                 f"You often leave about {habit.gap_minutes} minutes free {where} "
-                f"{_q(habit.related_title)}. If you want to save it as a rule, tell me what to "
-                'call it (for example "break").',
-                ("No",),
+                f"{_q(habit.related_title)}: shall I save it as a rule?",
+                YES_NO,
                 expects_reply=True,
+                choices=_habit_choices(habit),
             )
     raise AssertionError(f"Unhandled proposal: {habit!r}")
+
+
+def _habit_choices(habit: HabitProposal) -> tuple[Choice, Choice]:
+    """Yes saves the proposed rule as it is, No rejects the proposal: no model in between."""
+    match habit:
+        case EventPatternProposal():
+            accept = AddEventRuleCall(
+                tool="add_event_rule",
+                trigger_title=habit.title,
+                typical_start=habit.typical_start,
+                typical_duration_minutes=habit.typical_duration_minutes,
+            )
+        case SequencePatternProposal():
+            accept = AddEventRuleCall(
+                tool="add_event_rule",
+                trigger_title=habit.trigger_title,
+                related_title=habit.related_title,
+                position=habit.position,  # type: ignore[arg-type]
+                offset_minutes=habit.offset_minutes or None,
+            )
+        case GapPatternProposal():
+            accept = AddEventRuleCall(
+                tool="add_event_rule",
+                trigger_title=GAP_TITLE,
+                related_title=habit.related_title,
+                position=habit.position,  # type: ignore[arg-type]
+                gap_minutes=habit.gap_minutes,
+            )
+    return accept, DismissHabitCall(tool="dismiss_habit")
 
 
 # --- missing data ----------------------------------------------------------------------
@@ -655,8 +725,6 @@ def _missing_field(missing: MissingField) -> Reply:
             return Reply("What is the event called?", expects_reply=True)
         case "event_description":
             return Reply("Which event do you mean?", expects_reply=True)
-        case "trigger_title" if subject == "gap":
-            return Reply("What do you want to call this free slot?", expects_reply=True)
         case "trigger_title":
             return Reply("Which event is it about?", expects_reply=True)
         case "time":

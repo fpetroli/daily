@@ -110,6 +110,16 @@ def test_missing_duration_asks_without_writing(repos):
     assert len(repos.schedule.events_for_date(DAY)) == 1
 
 
+def test_missing_duration_is_the_usual_one(repos):
+    add_event(repos, "shower", f"{DAY}T19:00", f"{DAY}T19:15")
+    repos.event_defaults.upsert("Breakfast", typical_duration_minutes=20)
+
+    outcome = create(repos, "breakfast", anchor_description="shower", position="after")
+
+    assert isinstance(outcome, EventCreated)
+    assert (outcome.start, outcome.end) == (f"{DAY}T19:15", f"{DAY}T19:35")
+
+
 def test_missing_position_asks(repos):
     add_event(repos, "shower", f"{DAY}T19:00", f"{DAY}T19:15")
 

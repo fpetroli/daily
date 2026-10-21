@@ -111,7 +111,7 @@ with duration_minutes.
 - to "Which one do you mean?" with several events: the answer picks one of the candidates \
 ("the second one", its title) → repeat the action of the previous request with its \
 event_description and its event_time.
-- to a habit suggestion: yes (or the requested name) → add_event_rule with the proposed \
+- to a habit suggestion: yes → add_event_rule with the proposed \
 values; no → dismiss_habit.
 - to a question about missing data ("At what time?", "What is the event called?"): redo the \
 same action adding the value.
@@ -253,6 +253,8 @@ def _example_days(now: datetime) -> dict[str, str]:
 
 # The examples must NOT repeat sentences, titles or values of the eval cases: otherwise the
 # measurement would reward copying, not understanding (a test checks it on the cases' text).
+# Their titles must not be common names either ("meeting", "call"): E2B copied "meeting with
+# Marta" or "call with the notary" when the user said only "the meeting" or "the call".
 def _example_calls(day: dict[str, str]) -> list[tuple[str, dict[str, object]]]:
     tomorrow = day["tomorrow"]
     add = "add_event"
@@ -475,8 +477,8 @@ def _example_calls(day: dict[str, str]) -> list[tuple[str, dict[str, object]]]:
             },
         ),
         (
-            "put the call with the notary in half an hour",
-            {"tool": add, "title": "call with the notary", "time": "11:05"},
+            "put the visit to the notary in half an hour",
+            {"tool": add, "title": "visit to the notary", "time": "11:05"},
             "10:35",
         ),
         (
@@ -602,15 +604,15 @@ def _example_conversations(
         (
             [
                 (
-                    "remove the meeting",
-                    "I found several events today: 1) meeting with the team (10:00-11:00), "
-                    "2) meeting with Marta (15:00-16:00). Which one do you mean?",
+                    "remove the rehearsal",
+                    "I found several events today: 1) rehearsal with the choir (10:00-11:00), "
+                    "2) rehearsal with Marta (15:00-16:00). Which one do you mean?",
                 )
             ],
             "the first one",
             {
                 "tool": "remove_event",
-                "event_description": "meeting with the team",
+                "event_description": "rehearsal with the choir",
                 "event_time": "10:00",
             },
         ),
@@ -721,6 +723,89 @@ def _example_conversations(
             "no",
             {"tool": "dismiss_habit"},
         ),
+        # The recent conversation is about something else: the message is a request of its
+        # own, and the previous action, title and minutes are not copied (real use, 2026-10).
+        (
+            [
+                (
+                    "after swimming I always do the sauna",
+                    'Done: "sauna" always goes after "swimming", right after.',
+                )
+            ],
+            "put swimming on thursday at 6 pm for an hour",
+            {
+                "tool": "add_event",
+                "title": "swimming",
+                "date": day["thursday"],
+                "time": "18:00",
+                "duration_minutes": 60,
+            },
+        ),
+        (
+            [
+                (
+                    "the pilates class is always at 8 am and lasts an hour",
+                    'Done: "pilates class" usually is at 08:00 and lasts 60 minutes.',
+                )
+            ],
+            "schedule the pilates class on saturday",
+            {"tool": "add_event", "title": "pilates class", "date": day["saturday"]},
+        ),
+        (
+            [("delete it", "Which event do you mean?")],
+            "the piano lesson always lasts 45 minutes",
+            {
+                "tool": "add_event_rule",
+                "trigger_title": "piano lesson",
+                "typical_duration_minutes": 45,
+            },
+        ),
+        (
+            [("put tai chi today at 8 for 30 minutes", "Done: tai chi today from 08:00 to 08:30.")],
+            "nap at 2 pm for 20 minutes",
+            {"tool": "add_event", "title": "nap", "time": "14:00", "duration_minutes": 20},
+        ),
+        (
+            [
+                (
+                    "the sauna always goes after swimming",
+                    'Done: "sauna" always goes after "swimming", right after.',
+                ),
+                (
+                    "stretching comes 10 minutes after every run",
+                    'Done: "stretching" always goes after "run", 10 minutes after.',
+                ),
+            ],
+            "the run usually lasts 40 minutes",
+            {"tool": "add_event_rule", "trigger_title": "run", "typical_duration_minutes": 40},
+        ),
+        (
+            [
+                (
+                    "stretching comes 10 minutes after every run",
+                    'Done: "stretching" always goes after "run", 10 minutes after.',
+                )
+            ],
+            "after the match add a 20-minute cool-down",
+            {
+                "tool": "add_event_relative",
+                "title": "cool-down",
+                "anchor_description": "match",
+                "position": "after",
+                "duration_minutes": 20,
+            },
+        ),
+        (
+            [("add the warm-up before the match", 'How long does "warm-up" last?')],
+            "it takes a quarter of an hour",
+            {
+                "tool": "add_event_relative",
+                "title": "warm-up",
+                "anchor_description": "match",
+                "position": "before",
+                "duration_minutes": 15,
+            },
+        ),
     ]
 
 
@@ -819,7 +904,7 @@ def example_turns(now: datetime) -> list[dict[str, str]]:
             when = clock()
         add(ParseRequest(message, when), call)
     for exchange, answer, call in _example_conversations(day):
-        history = tuple(Exchange(user, reply) for user, reply in exchange[-1:])
+        history = tuple(Exchange(user, reply) for user, reply in exchange)
         add(ParseRequest(answer, clock(), history=history), call)
     return turns
 

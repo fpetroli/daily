@@ -40,15 +40,6 @@ class RuleProposal:
 
 
 @dataclass(frozen=True, slots=True)
-class RuleCandidateInfo:
-    """Candidate of an ambiguous match on `remove_event_rule` (rules have no times)."""
-
-    rule_id: str
-    trigger_title: str
-    related_title: str
-
-
-@dataclass(frozen=True, slots=True)
 class ScheduleEntry:
     """Row of a day's schedule; `done` is derived (the event is already over)."""
 

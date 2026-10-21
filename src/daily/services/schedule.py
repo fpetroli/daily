@@ -8,7 +8,7 @@ only reported.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from daily.domain.timeband import TimeBand, band_bounds, filter_by_band
@@ -45,6 +45,9 @@ from daily.services.types import (
 )
 from daily.storage.db import transaction
 
+# How many days after today an event is looked for when the user does not say its day.
+LOOK_AHEAD_DAYS = 14
+
 # --- shared outcomes ------------------------------------------------------------------
 
 
@@ -56,6 +59,16 @@ class InvalidRange:
 @dataclass(frozen=True, slots=True)
 class EventNotFound:
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class EventAlreadyThere:
+    """An event with the same title, start and end is already in the schedule: a second copy
+    is never what the user wants (the model sometimes repeats the previous addition)."""
+
+    title: str
+    start: str
+    end: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +118,7 @@ class NeedsGapConfirmation:
 
 CreateEventOutcome = (
     EventCreated
+    | EventAlreadyThere
     | InvalidRange
     | InsufficientInfo
     | NeedsAnchorConfirmation
@@ -123,14 +137,18 @@ def persist_new_event(
     derived_from_event_id: str | None = None,
     derived_from_rule_id: str | None = None,
     now: datetime | None = None,
-) -> EventCreated | InvalidRange:
+) -> EventCreated | EventAlreadyThere | InvalidRange:
     """Common path of `create_event` and `create_event_relative`, from already resolved times.
 
-    Order: range check → provenance (explicit, otherwise inferred) → insertion → conflicts →
-    downstream proposals → habit tracking. The writes are in a single transaction.
+    Order: range check → exact copy check → provenance (explicit, otherwise inferred) →
+    insertion → conflicts → downstream proposals → habit tracking. The writes are in a single
+    transaction.
     """
     if parse_iso(end) <= parse_iso(start):
         return InvalidRange()
+    for same in repos.schedule.find_conflicts(start=start, end=end):
+        if same.title.lower() == title.lower() and (same.start, same.end) == (start, end):
+            return EventAlreadyThere(same.title, same.start, same.end)
 
     if derived_from_event_id is None and derived_from_rule_id is None:
         derived_from_event_id, derived_from_rule_id = infer_provenance(
@@ -250,6 +268,26 @@ class EventUpdated:
     original_title: str
     conflicts: tuple[ConflictInfo, ...] = ()
     cascade_candidates: tuple[CascadeCandidate, ...] = ()
+
+
+def event_day(
+    repos: Repositories,
+    *,
+    description: str,
+    at_time: str | None,
+    today: str,
+    days: int = LOOK_AHEAD_DAYS,
+) -> str:
+    """The day of an event the user names without a day: today if it is there, otherwise the
+    nearest of the next `days` days that has it. Today again if no day has it, so that the
+    "not found" is about today."""
+    first = date.fromisoformat(today)
+    for offset in range(days + 1):
+        day = (first + timedelta(days=offset)).isoformat()
+        found = repos.resolver.resolve(description=description, date=day, at_time=at_time)
+        if found.error != ResolveError.NOT_FOUND:
+            return day
+    return today
 
 
 UpdateEventOutcome = EventUpdated | EventNotFound | EventAmbiguous | InvalidRange

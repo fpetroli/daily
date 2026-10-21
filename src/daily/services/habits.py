@@ -1,9 +1,10 @@
 """Habit detection: counting on every added event and a proposal when the threshold is hit.
 
 Counting (`record_habit_signals`) runs after every insertion, whatever its origin. The
-proposal (`next_habit_proposal`) is a read: there is no pending state, what was proposed lives
-in the chat history and the user's answer becomes a tool call (`add_event_rule` for yes,
-`dismiss_habit` for no).
+proposal (`next_habit_proposal`) is a read; once shown (`mark_proposed`) its counter starts
+again, so a proposal the user lets pass comes back only after as many new occurrences. The
+answer becomes a tool call: `add_event_rule` for yes, `dismiss_habit` for no, which rejects
+the proposal that was shown.
 """
 
 from dataclasses import dataclass
@@ -162,14 +163,23 @@ def next_habit_proposal(repos: Repositories) -> HabitProposal | None:
     return None
 
 
-def dismiss_habit(repos: Repositories) -> HabitProposal | None:
-    """The user rejects the current habit proposal: it will not be proposed again.
+def mark_proposed(repos: Repositories, proposal: HabitProposal) -> None:
+    """The proposal is being shown: its counter starts again from zero. Still pending, it comes
+    back once the habit reaches the threshold again; yes or no close it before that."""
+    match proposal:
+        case EventPatternProposal():
+            repos.event_patterns.restart_count(proposal.note_id)
+        case SequencePatternProposal():
+            repos.sequence_patterns.restart_count(proposal.note_id)
+        case GapPatternProposal():
+            repos.gap_patterns.restart_count(proposal.note_id)
 
-    The current proposal is the one `next_habit_proposal` returns now: it was shown at the
-    end of the turn that triggered it, and nothing replaces it until the user answers.
-    Returns what was rejected, `None` if there was nothing.
+
+def dismiss_habit(repos: Repositories, proposal: HabitProposal | None) -> HabitProposal | None:
+    """The user rejects `proposal`, the one just shown: it will not be proposed again.
+
+    Returns what was rejected, `None` if nothing was shown.
     """
-    proposal = next_habit_proposal(repos)
     if proposal is None:
         return None
     match proposal:

@@ -1,5 +1,6 @@
 """The Telegram bot: a message becomes a turn, a button becomes the user's answer, and the
-commands read or change the schedule without the model.
+commands read or change the schedule without the model. A button whose reply says exactly
+what it does (Yes and No of a habit proposal, the rule to remove) skips the model too.
 
 The bot asks Telegram for new messages (long polling): the service opens no port. Only the
 user ids in the allowlist are served, and only in private chats: the schedule is personal.
@@ -26,10 +27,10 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from daily.agent.execute import execute
-from daily.agent.results import Executed, Execution
+from daily.agent.results import Choice, Executed, Execution
 from daily.agent.schemas import parse_tool_call
 from daily.agent.templates import Reply, Styled, render, rules_reply, undone_text
-from daily.agent.turn import TurnService
+from daily.agent.turn import TurnResult, TurnService
 from daily.services.context import Repositories
 from daily.services.schedule import EventCreated, EventRemoved, EventUpdated
 from daily.services.undo import undo_last_action
@@ -112,6 +113,7 @@ class _Prompt:
     message_id: int
     text: str
     quick_replies: tuple[str, ...]
+    choices: tuple[Choice | None, ...] = ()
 
 
 class Bot:
@@ -207,6 +209,10 @@ class Bot:
             typing.cancel()
             with suppress(asyncio.CancelledError):
                 await typing
+        await self._reply(chat_id, result)
+
+    async def _reply(self, chat_id: int, result: TurnResult) -> None:
+        """Sends the reply of a turn with its buttons: they are the only ones that act."""
         await self._close_prompt()
         self._seq += 1
         reply = result.reply
@@ -214,7 +220,12 @@ class Bot:
         sent = await self._send(chat_id, reply.text, buttons, reply.styles)
         if buttons:
             self._prompt = _Prompt(
-                self._seq, chat_id, sent["message_id"], reply.text, reply.quick_replies
+                self._seq,
+                chat_id,
+                sent["message_id"],
+                reply.text,
+                reply.quick_replies,
+                reply.choices,
             )
 
     async def _send(
@@ -276,7 +287,11 @@ class Bot:
             await self._api.edit_message_text(
                 prompt.chat_id, prompt.message_id, f"{prompt.text}\n\n» {answer}"
             )
-        await self._run_turn(prompt.chat_id, answer, now)
+        choice = prompt.choices[index] if index < len(prompt.choices) else None
+        if choice is None:
+            await self._run_turn(prompt.chat_id, answer, now)
+        else:  # the button says exactly what to do: no model in between
+            await self._reply(prompt.chat_id, await self._turn.choose(choice, answer, now=now))
 
     # --- commands ------------------------------------------------------------------
 

@@ -9,8 +9,11 @@ from daily.services.rules import (
     RemoveEventRuleAmbiguous,
     RemoveEventRuleNotFound,
     RemoveEventRuleSuccess,
+    SavedGap,
+    UsualTimes,
     add_event_rule,
     remove_event_rule,
+    remove_rule_target,
 )
 
 
@@ -127,8 +130,20 @@ def test_remove_with_related_title_deletes_the_rule(repos):
 
     outcome = remove_rule(repos, "shower", related_title="gym")
 
-    assert outcome == RemoveEventRuleSuccess()
+    assert isinstance(outcome, RemoveEventRuleSuccess)
+    assert outcome.removed.trigger_title == "shower"
     assert repos.event_rules.find_by_trigger("shower") == []
+
+
+def test_remove_finds_the_rule_said_the_other_way_round(repos):
+    repos.event_rules.insert_rule(
+        trigger_title="gym", related_title="breakfast", position="before", offset_minutes=0
+    )
+
+    outcome = remove_rule(repos, "breakfast", related_title="gym")
+
+    assert isinstance(outcome, RemoveEventRuleSuccess)
+    assert repos.event_rules.get_all() == []
 
 
 def test_remove_with_related_title_without_match_not_found(repos):
@@ -140,8 +155,47 @@ def test_remove_without_related_title_deletes_the_whole_defaults_row(repos):
 
     outcome = remove_rule(repos, "meeting")
 
-    assert outcome == RemoveEventRuleSuccess()
+    assert outcome == RemoveEventRuleSuccess(UsualTimes("meeting"))
     assert repos.event_defaults.get_by_title("meeting") is None
+
+
+def test_remove_with_one_title_deletes_its_only_rule_on_either_side(repos):
+    repos.event_rules.insert_rule(
+        trigger_title="breakfast", related_title="gym", position="after", offset_minutes=0
+    )
+
+    outcome = remove_rule(repos, "gym")
+
+    assert isinstance(outcome, RemoveEventRuleSuccess)
+    assert repos.event_rules.get_all() == []
+
+
+def test_remove_with_one_title_and_several_things_asks_which(repos):
+    repos.event_defaults.upsert("gym", typical_start="07:00", typical_duration_minutes=90)
+    repos.event_rules.insert_rule(
+        trigger_title="gym", related_title="breakfast", position="before", offset_minutes=0
+    )
+
+    outcome = remove_rule(repos, "gym")
+
+    assert isinstance(outcome, RemoveEventRuleAmbiguous)
+    assert outcome.candidates[0] == UsualTimes("gym")
+    assert outcome.candidates[1].related_title == "breakfast"
+    assert repos.event_defaults.get_by_title("gym") is not None  # nothing removed yet
+    assert len(repos.event_rules.get_all()) == 1
+
+
+def test_remove_rule_target_deletes_exactly_the_choice(repos):
+    repos.event_defaults.upsert("gym", typical_start="07:00", typical_duration_minutes=90)
+    rule_id = repos.event_rules.insert_rule(
+        trigger_title="gym", related_title="breakfast", position="before", offset_minutes=0
+    )
+    rule = repos.event_rules.get_by_id(rule_id)
+
+    assert remove_rule_target(repos, rule) == RemoveEventRuleSuccess(rule)
+    assert repos.event_rules.get_all() == []
+    assert repos.event_defaults.get_by_title("gym") is not None
+    assert remove_rule_target(repos, rule) == RemoveEventRuleNotFound()
 
 
 def test_remove_with_field_clears_only_that_field(repos):
@@ -149,7 +203,7 @@ def test_remove_with_field_clears_only_that_field(repos):
 
     outcome = remove_rule(repos, "meeting", field="typical_duration_minutes")
 
-    assert outcome == RemoveEventRuleSuccess()
+    assert outcome == RemoveEventRuleSuccess(UsualTimes("meeting", "typical_duration_minutes"))
     saved = repos.event_defaults.get_by_title("meeting")
     assert (saved.typical_start, saved.typical_duration_minutes) == ("09:00", None)
 
@@ -250,6 +304,20 @@ def test_rule_of_another_pair_does_not_close_the_sequence_pattern(repos):
     add_rule(repos, "dinner", related_title="gym", position="after", offset_minutes=0)
 
     assert len(repos.sequence_patterns.list_pending()) == 1
+
+
+def test_a_position_and_minutes_with_no_related_event_are_free_time_around_it(repos):
+    outcome = add_rule(repos, "work", position="before", offset_minutes=30)
+
+    assert outcome == AddEventRuleSuccess(SavedGap("work", "before", 30))
+    (rule,) = repos.event_rules.get_all()
+    assert (rule.trigger_title, rule.related_title, rule.position) == (
+        "free time",
+        "work",
+        "before",
+    )
+    assert (rule.offset_minutes, rule.gap_minutes) == (None, 30)
+    assert repos.event_defaults.get_by_title("work") is None
 
 
 def test_gap_rule_closes_the_gap_pattern_within_tolerance(repos):

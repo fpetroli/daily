@@ -1,16 +1,17 @@
 """Rules (`event_rules`, `event_defaults`) and what follows from them: downstream proposals
 and provenance.
 
-`add_event_rule` and `remove_event_rule` route on `related_title`: when present they write a
-relation or a gap in `event_rules`, when absent the usual time in `event_defaults`. Creating
-a rule closes the pending patterns that anticipated it (no pending state: the confirmation
-is the tool call itself).
+`add_event_rule` routes on `related_title`: when present it writes a relation or a gap in
+`event_rules`, when absent the usual time in `event_defaults`. Creating a rule closes the
+pending patterns that anticipated it (no pending state: the confirmation is the tool call
+itself). `remove_event_rule` looks for what the titles describe on both sides of the rules
+and asks to choose when it finds more than one thing.
 """
 
 import re
 from dataclasses import dataclass
 
-from daily.domain.models import ScheduleEvent
+from daily.domain.models import EventRule, ScheduleEvent
 from daily.services.context import Repositories
 from daily.services.habits import (
     confirm_event_patterns,
@@ -22,10 +23,14 @@ from daily.services.placement import (
     AnchorResolved,
     resolve_rule_placement,
 )
-from daily.services.types import RuleCandidateInfo, RuleProposal
+from daily.services.types import RuleProposal
 from daily.storage.db import transaction
 
 _TIME_OF_DAY = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+# The name of a gap the user does not name ("it takes me 30 minutes to get to work"): a gap
+# is shown by its minutes and its event, never by its name.
+GAP_TITLE = "free time"
 
 
 def compute_rule_proposals(repos: Repositories, *, anchor: ScheduleEvent) -> list[RuleProposal]:
@@ -78,8 +83,20 @@ def infer_provenance(
 
 
 @dataclass(frozen=True, slots=True)
+class SavedGap:
+    """Free time kept before or after an event."""
+
+    related_title: str
+    position: str
+    gap_minutes: int
+
+
+@dataclass(frozen=True, slots=True)
 class AddEventRuleSuccess:
-    pass
+    """`gap` is set when the call was read as free time around its event (a position and
+    minutes but no related event): the reply tells what was saved, not what was said."""
+
+    gap: SavedGap | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +153,17 @@ def add_event_rule(
 
     Relational branch: if a row already exists for the trigger/related pair it is updated
     instead of duplicated (two rows would give double proposals).
+
+    A position and minutes with no related event ("it takes me 30 minutes to get to work":
+    30 minutes before work) are free time around `trigger_title` itself: a gap rule.
     """
+    gap: SavedGap | None = None
+    if related_title is None and position is not None and (gap_minutes or offset_minutes):
+        gap_minutes = gap_minutes or offset_minutes
+        assert gap_minutes is not None
+        gap = SavedGap(trigger_title, position, gap_minutes)
+        trigger_title, related_title, offset_minutes = GAP_TITLE, trigger_title, None
+
     if related_title is None:
         return _add_default(
             repos,
@@ -173,7 +200,7 @@ def add_event_rule(
             confirm_sequence_patterns(
                 repos, trigger_title=trigger_title, related_title=related_title
             )
-    return AddEventRuleSuccess()
+    return AddEventRuleSuccess(gap)
 
 
 def _add_default(
@@ -207,8 +234,20 @@ def _add_default(
 
 
 @dataclass(frozen=True, slots=True)
+class UsualTimes:
+    """The usual time and duration of an event, as something to remove: `field` is only one
+    of the two."""
+
+    title: str
+    field: str | None = None
+
+
+RuleTarget = EventRule | UsualTimes
+
+
+@dataclass(frozen=True, slots=True)
 class RemoveEventRuleSuccess:
-    pass
+    removed: RuleTarget
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +257,7 @@ class RemoveEventRuleNotFound:
 
 @dataclass(frozen=True, slots=True)
 class RemoveEventRuleAmbiguous:
-    candidates: tuple[RuleCandidateInfo, ...]
+    candidates: tuple[RuleTarget, ...]
 
 
 RemoveEventRuleOutcome = RemoveEventRuleSuccess | RemoveEventRuleNotFound | RemoveEventRuleAmbiguous
@@ -233,25 +272,47 @@ def remove_event_rule(
 ) -> RemoveEventRuleOutcome:
     """Deletes a rule or a usual time.
 
-    Without `related_title` it acts on `event_defaults`, never with
-    a fuzzy match on `event_rules` by title alone; `field` (only there) clears that field
-    instead of deleting the row.
+    With two titles it is the rule between them, said either way round: "breakfast right
+    after the gym" is the same rule as "the gym right before breakfast". With one title it is
+    anything about that event: its usual time and duration, the rules in which it appears on
+    either side; `field` limits it to one of the usual values. One match is removed; several
+    are returned, to choose from.
     """
-    if related_title is None:
-        if repos.event_defaults.get_by_title(trigger_title) is None:
-            return RemoveEventRuleNotFound()
-        if field is not None:
-            repos.event_defaults.clear_field(trigger_title, field)
-        else:
-            repos.event_defaults.delete_row(trigger_title)
-        return RemoveEventRuleSuccess()
-
-    matches = repos.event_rules.find_matching(trigger_title, related_title)
-    if not matches:
-        return RemoveEventRuleNotFound()
-    if len(matches) > 1:
-        return RemoveEventRuleAmbiguous(
-            tuple(RuleCandidateInfo(r.rule_id, r.trigger_title, r.related_title) for r in matches)
+    targets: list[RuleTarget]
+    if related_title is not None:
+        targets = list(
+            repos.event_rules.find_matching(trigger_title, related_title)
+            or repos.event_rules.find_matching(related_title, trigger_title)
         )
-    repos.event_rules.delete_rule(matches[0].rule_id)
-    return RemoveEventRuleSuccess()
+    else:
+        usual = repos.event_defaults.get_by_title(trigger_title)
+        targets = [UsualTimes(usual.title, field)] if usual is not None else []
+        if field is None:
+            rules = repos.event_rules.find_by_trigger(trigger_title)
+            rules += repos.event_rules.find_by_related(trigger_title)
+            targets += list({rule.rule_id: rule for rule in rules}.values())
+    if not targets:
+        return RemoveEventRuleNotFound()
+    if len(targets) > 1:
+        return RemoveEventRuleAmbiguous(tuple(targets))
+    return remove_rule_target(repos, targets[0])
+
+
+def remove_rule_target(
+    repos: Repositories, target: RuleTarget
+) -> RemoveEventRuleSuccess | RemoveEventRuleNotFound:
+    """Deletes exactly `target`: the choice made among the candidates of an ambiguous removal.
+    Not found if it is already gone."""
+    match target:
+        case UsualTimes(title=title, field=field):
+            if repos.event_defaults.get_by_title(title) is None:
+                return RemoveEventRuleNotFound()
+            if field is not None:
+                repos.event_defaults.clear_field(title, field)
+            else:
+                repos.event_defaults.delete_row(title)
+        case EventRule(rule_id=rule_id):
+            if repos.event_rules.get_by_id(rule_id) is None:
+                return RemoveEventRuleNotFound()
+            repos.event_rules.delete_rule(rule_id)
+    return RemoveEventRuleSuccess(target)

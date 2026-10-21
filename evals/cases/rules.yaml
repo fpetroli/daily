@@ -60,8 +60,9 @@
 - id: rules-11
   say: "after work I always need 30 free minutes"
   call: {tool: add_event_rule, related_title: work, position: after, gap_minutes: 30}
-  kind: missing_field:trigger_title
-  reply_has: ["What do you want to call this free slot?"]
+  kind: add_event_rule_success
+  rules_added: [[free time, work]]
+  reply_has: ['after "work" I will always leave a 30-minute gap']
 
 - id: rules-12
   say: "the shower always goes 10 minutes after the gym"
@@ -80,3 +81,33 @@
   say: "add a rule"
   call: {tool: add_event_rule}
   kind: missing_field:trigger_title
+
+# From the reports of real use (2026-10): free time said as travel time, rules said the
+# other way round or with one title only.
+- id: rules-15
+  say: "it takes me 30 minutes to get to the office"
+  call: {tool: add_event_rule, trigger_title: office, position: before, offset_minutes: 30}
+  kind: add_event_rule_success
+  rules_added: [[free time, office]]
+
+- id: rules-16
+  say: "remove the rule breakfast right after the gym"
+  seed: {rules: [[gym, breakfast, before, 0]]}
+  call: {tool: remove_event_rule, trigger_title: breakfast, related_title: gym}
+  kind: remove_event_rule_success
+  rules_removed: [[gym, breakfast]]
+
+- id: rules-17
+  say: "remove the rule about the gym"
+  seed: {rules: [[breakfast, gym, after, 0]]}
+  call: {tool: remove_event_rule, related_title: gym}
+  kind: remove_event_rule_success
+  rules_removed: [[breakfast, gym]]
+
+- id: rules-18
+  say: "remove the gym rule"
+  seed:
+    rules: [[gym, breakfast, before, 0]]
+    defaults: [[gym, "07:00", 90]]
+  call: {tool: remove_event_rule, trigger_title: gym}
+  kind: remove_event_rule_ambiguous

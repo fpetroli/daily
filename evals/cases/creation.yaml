@@ -202,3 +202,27 @@
   call: {tool: add_event, title: shower}
   kind: needs_duration_confirmation
   reply_has: ['How long does "shower" usually last?']
+
+# From the reports of real use (2026-09): "after X add Y" is an event now, not a rule, and
+# minutes with "for" are its duration.
+- id: creation-31
+  say: "after work add a 30-minute shower"
+  seed: {events: [[work, "{today}T09:00", "{today}T18:00"]]}
+  call: {tool: add_event_relative, title: shower, anchor_description: work, position: after, duration_minutes: 30}
+  added: [[shower, "{today}T18:00", "{today}T18:30"]]
+
+- id: creation-32
+  say: "add dinner for an hour after the shower"
+  seed: {events: [[shower, "{today}T19:00", "{today}T19:30"]]}
+  call: {tool: add_event_relative, title: dinner, anchor_description: shower, position: after, duration_minutes: 60}
+  added: [[dinner, "{today}T19:30", "{today}T20:30"]]
+
+# From the reports of real use (2026-10): "add X after Y" without minutes takes the usual
+# duration of X, it does not ask for it.
+- id: creation-33
+  say: "add the shower after the shopping"
+  seed:
+    events: [[shopping, "{today}T19:15", "{today}T20:00"]]
+    defaults: [[Shower, null, 30]]
+  call: {tool: add_event_relative, title: shower, anchor_description: shopping, position: after}
+  added: [[shower, "{today}T20:00", "{today}T20:30"]]

@@ -233,6 +233,30 @@ async def test_a_quick_reply_is_sent_as_the_users_answer(bot, api, parser, repos
     assert len(repos.event_rules.get_all()) == 1
 
 
+async def test_the_buttons_of_a_habit_proposal_skip_the_model(bot, api, parser, repos):
+    for day in ("2026-09-22", "2026-09-23", "2026-09-24"):
+        parser.then(
+            {
+                "tool": "add_event",
+                "title": "yoga",
+                "date": day,
+                "time": "19:00",
+                "duration_minutes": 45,
+            }
+        )
+        await bot.handle_update(message("add yoga at 7 pm"))
+    proposal, buttons = api.texts[-1], api.sent[-1][2]
+    assert "shall I save it as a usual time?" in proposal
+    assert buttons[0] == [("Yes", "q:3:0"), ("No", "q:3:1")]
+
+    await bot.handle_update(press("q:3:0", message_id=103))
+
+    assert len(parser.requests) == 3  # the Yes did not go to the model
+    assert api.edited == [(USER, 103, f"{proposal}\n\n» Yes")]
+    assert api.texts[-1] == 'Done: "yoga" usually is at 19:00 and lasts 45 minutes.'
+    assert repos.event_defaults.get_by_title("yoga").typical_start == "19:00"
+
+
 async def test_long_quick_replies_go_one_per_row(bot, api, parser):
     parser.then({"tool": "add_event_rule", "trigger_title": "stretching", "related_title": "gym"})
     await bot.handle_update(message("stretching with the gym"))

@@ -34,6 +34,11 @@ def _set_status(conn: sqlite3.Connection, table: str, note_id: str, status: Note
     conn.execute(f"UPDATE {table} SET status = ? WHERE note_id = ?", (status.value, note_id))
 
 
+def _restart_count(conn: sqlite3.Connection, table: str, note_id: str) -> None:
+    """The counter back to zero, window and reference unchanged: the next occurrence is 1."""
+    conn.execute(f"UPDATE {table} SET occurrence_count = 0 WHERE note_id = ?", (note_id,))
+
+
 class EventPatternsRepository:
     """Standalone event repeated at a similar time and duration (match on both)."""
 
@@ -120,6 +125,9 @@ class EventPatternsRepository:
 
     def set_status(self, note_id: str, status: NoteStatus) -> None:
         _set_status(self._conn, "event_patterns", note_id, status)
+
+    def restart_count(self, note_id: str) -> None:
+        _restart_count(self._conn, "event_patterns", note_id)
 
 
 class TriggerDurationPatternsRepository:
@@ -298,6 +306,9 @@ class SequencePatternsRepository:
     def set_status(self, note_id: str, status: NoteStatus) -> None:
         _set_status(self._conn, "sequence_patterns", note_id, status)
 
+    def restart_count(self, note_id: str) -> None:
+        _restart_count(self._conn, "sequence_patterns", note_id)
+
 
 class GapPatternsRepository:
     """Recurring empty slot tied to an anchor (match on the gap minutes).
@@ -385,3 +396,6 @@ class GapPatternsRepository:
 
     def set_status(self, note_id: str, status: NoteStatus) -> None:
         _set_status(self._conn, "gap_patterns", note_id, status)
+
+    def restart_count(self, note_id: str) -> None:
+        _restart_count(self._conn, "gap_patterns", note_id)

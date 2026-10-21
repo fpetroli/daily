@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from daily.storage.turn_log_repo import TurnLogRepository
+from daily.storage.turn_log_repo import AmbiguousTurnId, TurnLogRepository
 from turn_log import read_turn
 
 NOW = datetime(2026, 9, 22, 10, 0)
@@ -135,3 +135,96 @@ def test_flag_of_a_non_last_turn_does_not_include_later_ones(repo, conn):
 
 def test_flag_of_unknown_turn_id_writes_no_context(repo):
     assert repo.flag("never-existed", "note") is False
+
+
+# --- handling the reports ---------------------------------------------------------------
+
+
+def flagged(repo, message, note="wrong"):
+    turn_id = repo.record(
+        message=message, tool=None, call_json=None, kind="no_action", reply_text="Ok.", now=NOW
+    )
+    repo.flag(turn_id, note)
+    return turn_id
+
+
+def test_reports_are_the_open_flagged_turns_oldest_first(repo):
+    first = flagged(repo, "a")
+    repo.record(message="b", tool=None, call_json=None, kind="no_action", reply_text="Ok.")
+    second = flagged(repo, "c", note="")  # a report without a note is still a report
+
+    assert [r.turn_id for r in repo.reports()] == [first, second]
+    assert repo.reports()[0].note == "wrong"
+
+
+def test_a_handled_report_is_no_longer_open(repo):
+    first = flagged(repo, "a")
+    second = flagged(repo, "b")
+
+    assert repo.handle(first[:8], "code", now=NOW) == first
+
+    assert [r.turn_id for r in repo.reports()] == [second]
+    [handled, _] = repo.reports(include_handled=True)
+    assert (handled.handled_at, handled.outcome) == ("2026-09-22T10:00:00", "code")
+
+
+def test_an_assigned_report_stays_open_with_where_its_fix_goes(repo):
+    first = flagged(repo, "a")
+    second = flagged(repo, "b")
+    repo.handle(second, "code", now=NOW)
+
+    assert repo.assign(first, "model") == first
+    assert repo.assign(second, "model") == second  # a closed one opens again
+
+    assert [(r.turn_id, r.outcome, r.handled_at) for r in repo.reports()] == [
+        (first, "model", None),
+        (second, "model", None),
+    ]
+
+
+def test_reports_can_be_filtered_by_where_their_fix_goes(repo):
+    first = flagged(repo, "a")
+    second = flagged(repo, "b")
+    flagged(repo, "c")
+    repo.assign(first, "model")
+    repo.handle(second, "model", now=NOW)
+
+    assert [r.turn_id for r in repo.reports(outcome="model")] == [first]
+    assert [r.turn_id for r in repo.reports(include_handled=True, outcome="model")] == [
+        first,
+        second,
+    ]
+
+
+def test_handle_of_an_unknown_or_unflagged_turn_is_none(repo):
+    plain = repo.record(message="a", tool=None, call_json=None, kind="no_action", reply_text="Ok.")
+
+    assert repo.handle("never", "code") is None
+    assert repo.handle(plain, "code") is None
+
+
+def test_handle_with_an_ambiguous_prefix_raises(repo):
+    flagged(repo, "a")
+    flagged(repo, "b")
+
+    with pytest.raises(AmbiguousTurnId):
+        repo.handle("", "model")
+
+
+def test_a_new_report_on_a_handled_turn_opens_it_again(repo):
+    turn_id = flagged(repo, "a")
+    repo.handle(turn_id, "prompt")
+
+    repo.flag(turn_id, "still wrong")
+
+    [report] = repo.reports()
+    assert (report.note, report.handled_at, report.outcome) == ("still wrong", None, None)
+
+
+def test_the_outcome_must_be_a_known_one(repo, conn):
+    import sqlite3
+
+    turn_id = flagged(repo, "a")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE turn_log SET flag_outcome = 'other' WHERE turn_id = ?", (turn_id,))

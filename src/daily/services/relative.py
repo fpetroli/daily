@@ -6,7 +6,12 @@ from datetime import datetime
 from daily.services.context import Repositories
 from daily.services.placement import place_relative_to_boundary
 from daily.services.resolver import ResolveError
-from daily.services.schedule import EventCreated, InvalidRange, persist_new_event
+from daily.services.schedule import (
+    EventAlreadyThere,
+    EventCreated,
+    InvalidRange,
+    persist_new_event,
+)
 from daily.services.types import CandidateInfo, EventInfo
 
 
@@ -14,7 +19,8 @@ from daily.services.types import CandidateInfo, EventInfo
 class RelativeNeedsInfo:
     """`anchor_description`, `position` or `duration_minutes` is missing: no sensible default.
 
-    There are no defaults for these fields, so the user is always asked.
+    The anchor and the position have no default; the duration has only the title's usual
+    one. Without them the user is asked.
     """
 
 
@@ -29,7 +35,12 @@ class AnchorAmbiguous:
 
 
 CreateRelativeOutcome = (
-    EventCreated | InvalidRange | RelativeNeedsInfo | AnchorNotFound | AnchorAmbiguous
+    EventCreated
+    | EventAlreadyThere
+    | InvalidRange
+    | RelativeNeedsInfo
+    | AnchorNotFound
+    | AnchorAmbiguous
 )
 
 
@@ -50,8 +61,12 @@ def create_event_relative(
     The anchor is always an explicit phrase of the user, never a learned rule: neither
     `event_rules` nor gaps are read here. The search is on day `date`; `anchor_time`
     (`HH:MM`) disambiguates events with the same name. A missing offset is 0. Provenance is
-    inferred as in `create_event` only if the position matches a rule for that title.
+    inferred as in `create_event` only if the position matches a rule for that title. A
+    missing duration is the title's usual one, if known.
     """
+    if duration_minutes is None:
+        usual = repos.event_defaults.get_by_title(title)
+        duration_minutes = usual.typical_duration_minutes if usual is not None else None
     if anchor_description is None or position is None or duration_minutes is None:
         return RelativeNeedsInfo()
 

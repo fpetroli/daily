@@ -12,6 +12,7 @@ from daily.agent.parser import ParseFailure
 from daily.agent.schemas import ToolCall
 from daily.domain.timeband import TimeBand
 from daily.services.habits import HabitProposal
+from daily.services.rules import RuleTarget
 from daily.services.types import FreeSlot, ScheduleEntry
 
 
@@ -52,6 +53,11 @@ class Executed:
     call: ToolCall
     outcome: object
     habit: HabitProposal | None = None
+
+
+# What a button does without the model: a tool call executed as it is (a habit proposal's Yes
+# and No), or the rule or usual time picked among those to remove.
+Choice = ToolCall | RuleTarget
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,7 @@ from daily.services.placement import (
     AnchorMissing,
 )
 from daily.services.schedule import (
+    EventAlreadyThere,
     EventCreated,
     InsufficientInfo,
     InvalidRange,
@@ -105,6 +106,17 @@ def test_detects_conflicts_without_cancelling_the_insertion(repos):
 
     assert [c.title for c in outcome.conflicts] == ["meeting"]
     assert repos.schedule.get_by_id(outcome.event_id) is not None
+
+
+def test_an_exact_copy_is_not_added_again(repos):
+    add_event(repos, "Gym", f"{DAY}T18:00", f"{DAY}T19:00")
+
+    copy = create(repos, "gym", start=f"{DAY}T18:00", end=f"{DAY}T19:00")
+    later = create(repos, "gym", start=f"{DAY}T18:30", end=f"{DAY}T19:30")
+
+    assert copy == EventAlreadyThere("Gym", f"{DAY}T18:00", f"{DAY}T19:00")
+    assert isinstance(later, EventCreated)  # another time is another event
+    assert len(repos.schedule.events_for_date(DAY)) == 2
 
 
 def test_null_start_resolved_by_rule(repos):

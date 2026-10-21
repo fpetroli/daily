@@ -6,6 +6,7 @@ from daily.services.habits import (
     GapPatternProposal,
     SequencePatternProposal,
     dismiss_habit,
+    mark_proposed,
     next_habit_proposal,
     record_habit_signals,
 )
@@ -214,7 +215,7 @@ def test_proposal_order_event_then_sequence_then_gap(repos):
 
     first = next_habit_proposal(repos)
     assert isinstance(first, EventPatternProposal)
-    dismiss_habit(repos)
+    dismiss_habit(repos, first)
 
     second = next_habit_proposal(repos)
     assert isinstance(second, SequencePatternProposal)
@@ -223,37 +224,64 @@ def test_proposal_order_event_then_sequence_then_gap(repos):
         "gym",
         "after",
     )
-    dismiss_habit(repos)
+    dismiss_habit(repos, second)
 
     third = next_habit_proposal(repos)
     assert isinstance(third, GapPatternProposal)
     assert (third.related_title, third.gap_minutes) == ("work", 30)
-    dismiss_habit(repos)
+    dismiss_habit(repos, third)
 
     assert next_habit_proposal(repos) is None
 
 
 def test_dismiss_rejects_the_current_proposal_and_it_is_not_proposed_again(repos):
     seed_event_pattern(repos, occurrences=3)
+    shown = next_habit_proposal(repos)
 
-    dismissed = dismiss_habit(repos)
+    dismissed = dismiss_habit(repos, shown)
 
-    assert isinstance(dismissed, EventPatternProposal)
+    assert dismissed == shown
     assert next_habit_proposal(repos) is None
     # a new similar event does not bring the pattern back to "pending"
     seed_event_pattern(repos, occurrences=1)
     assert next_habit_proposal(repos) is None
 
 
-def test_dismiss_without_proposals_does_nothing(repos):
-    assert dismiss_habit(repos) is None
+def test_dismiss_without_a_shown_proposal_does_nothing(repos):
+    seed_event_pattern(repos, occurrences=3)
+
+    assert dismiss_habit(repos, None) is None
+    assert isinstance(next_habit_proposal(repos), EventPatternProposal)
+
+
+def test_a_shown_proposal_comes_back_only_after_the_threshold_again(repos):
+    seed_event_pattern(repos, occurrences=3)
+    mark_proposed(repos, next_habit_proposal(repos))
+
+    assert next_habit_proposal(repos) is None
+    seed_event_pattern(repos, occurrences=2)
+    assert next_habit_proposal(repos) is None
+    seed_event_pattern(repos, occurrences=1)
+    assert isinstance(next_habit_proposal(repos), EventPatternProposal)
+
+
+def test_mark_proposed_restarts_the_counter_of_each_kind(repos):
+    record_sequence(repos, 3)
+    record_gap(repos, 3)
+
+    for _ in range(2):
+        mark_proposed(repos, next_habit_proposal(repos))
+
+    assert next_habit_proposal(repos) is None
+    assert len(repos.sequence_patterns.list_pending()) == 1  # still pending, not rejected
+    assert len(repos.gap_patterns.list_pending()) == 1
 
 
 def test_a_rejected_pattern_has_state_rejected(repos):
     seed_event_pattern(repos, occurrences=3)
     [pending] = repos.event_patterns.list_pending()
 
-    dismiss_habit(repos)
+    dismiss_habit(repos, next_habit_proposal(repos))
 
     assert repos.event_patterns.list_pending() == []
     assert pending.status == NoteStatus.PENDING  # it was pending before the rejection

@@ -86,3 +86,36 @@ def test_main_rejects_an_unknown_command(capsys):
 
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_reports_are_listed_and_handled_from_the_terminal(tmp_path, capsys):
+    from daily.services.context import Repositories
+    from daily.storage.db import open_database
+
+    path = tmp_path / "daily.db"
+    repos = Repositories.from_connection(open_database(path))
+    turn_id = repos.turn_log.record(
+        message="add gym", tool=None, call_json=None, kind="no_action", reply_text="Ok."
+    )
+    repos.turn_log.flag(turn_id, "it did nothing")
+    repos.conn.close()
+
+    assert main(["reports", "--db", str(path)]) == 0
+    listed = capsys.readouterr().out
+    assert main(["assign", "--db", str(path), turn_id[:8], "model"]) == 0
+    assigned = capsys.readouterr().out
+    assert main(["reports", "--db", str(path), "--outcome", "model"]) == 0
+    to_fix = capsys.readouterr().out
+    assert main(["handle", "--db", str(path), turn_id[:8], "model"]) == 0
+    handled = capsys.readouterr().out
+    assert main(["reports", "--db", str(path)]) == 0
+    after = capsys.readouterr().out
+    assert main(["handle", "--db", str(path), "zzzz", "code"]) == 1
+
+    assert (
+        turn_id[:8] in listed and "  You:  add gym" in listed and "  Note: it did nothing" in listed
+    )
+    assert assigned == f"{turn_id}: to fix → model.\n"
+    assert "[to fix → model]" in to_fix
+    assert handled == f"{turn_id}: fixed → model.\n"
+    assert after == "No open reports.\n"

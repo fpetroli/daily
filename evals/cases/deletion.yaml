@@ -79,4 +79,12 @@
   split: holdout
   seed: {events: [[meeting, "{tomorrow}T16:00", "{tomorrow}T17:00"]]}
   call: {tool: remove_event, event_description: meeting}
-  kind: event_not_found
+  kind: event_removed
+  removed: [[meeting, "{tomorrow}T16:00", "{tomorrow}T17:00"]]
+
+# From the reports of real use (2026-09).
+- id: deletion-11
+  say: "delete work today"
+  seed: {events: [[work, "{today}T09:00", "{today}T18:00"]]}
+  call: {tool: remove_event, event_description: work}
+  removed: [[work, "{today}T09:00", "{today}T18:00"]]

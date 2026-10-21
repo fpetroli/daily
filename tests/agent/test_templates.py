@@ -38,8 +38,11 @@ from daily.services.rules import (
     RemoveEventRuleAmbiguous,
     RemoveEventRuleNotFound,
     RemoveEventRuleSuccess,
+    SavedGap,
+    UsualTimes,
 )
 from daily.services.schedule import (
+    EventAlreadyThere,
     EventAmbiguous,
     EventCreated,
     EventNotFound,
@@ -56,7 +59,6 @@ from daily.services.types import (
     CheckOverlapResult,
     EventInfo,
     FreeSlot,
-    RuleCandidateInfo,
     RuleProposal,
     ScheduleEntry,
 )
@@ -147,6 +149,16 @@ def test_missing_time_and_missing_duration_quote_the_title():
 
     assert ask_start == Reply('What time do you want "yoga"?', expects_reply=True)
     assert ask_duration == Reply('How long does "yoga" last?', expects_reply=True)
+
+
+def test_an_exact_copy_says_it_was_not_added_again():
+    outcome = EventAlreadyThere("gym", f"{TODAY}T18:00", f"{TODAY}T19:00")
+
+    reply = show({"tool": "add_event"}, outcome)
+
+    assert reply == Reply(
+        '"gym" is already in your schedule today from 18:00 to 19:00: I didn\'t add it again.'
+    )
 
 
 def test_invalid_range_asks_to_correct():
@@ -534,17 +546,32 @@ def test_relational_rule_gap_and_usual_time():
     )
 
 
-def test_rule_removed():
-    def removed(**payload):
-        return show({"tool": "remove_event_rule", **payload}, RemoveEventRuleSuccess()).text
+def test_free_time_read_from_a_position_tells_what_was_saved():
+    outcome = AddEventRuleSuccess(SavedGap("work", "before", 30))
+    payload = {"trigger_title": "work", "position": "before", "offset_minutes": 30}
 
-    assert removed(trigger_title="shower", related_title="gym") == (
-        'Done: I removed the rule of "shower" relative to "gym".'
+    reply = show({"tool": "add_event_rule", **payload}, outcome)
+
+    assert reply.text == 'Done: before "work" I will always leave a 30-minute gap.'
+
+
+def test_rule_removed_tells_what_was_removed():
+    def removed(target):
+        return show({"tool": "remove_event_rule"}, RemoveEventRuleSuccess(target)).text
+
+    assert removed(EventRule("r", "shower", "gym", "after")) == (
+        'Done: I removed the rule "shower right after gym".'
     )
-    assert removed(trigger_title="meeting") == (
+    assert removed(EventRule("r", "breakfast", "gym", "before", offset_minutes=15)) == (
+        'Done: I removed the rule "breakfast 15 min before gym".'
+    )
+    assert removed(EventRule("r", "free time", "work", "before", gap_minutes=30)) == (
+        'Done: I removed the rule "30 min free before work".'
+    )
+    assert removed(UsualTimes("meeting")) == (
         'Done: I removed the usual time and duration of "meeting".'
     )
-    assert removed(trigger_title="meeting", field="typical_start") == (
+    assert removed(UsualTimes("meeting", "typical_start")) == (
         'Done: I removed the usual time of "meeting".'
     )
 
@@ -567,19 +594,20 @@ def test_other_questions_about_rules():
     )
 
 
-def test_ambiguous_rules_are_quick_replies():
-    candidates = (
-        RuleCandidateInfo("r1", "shower", "gym"),
-        RuleCandidateInfo("r2", "shower", "swimming"),
-    )
+def test_ambiguous_rules_are_buttons_that_remove_them():
+    candidates = (UsualTimes("gym"), EventRule("r2", "shower", "gym", "after"))
 
     reply = show({"tool": "remove_event_rule"}, RemoveEventRuleAmbiguous(candidates))
 
     assert reply.text == (
-        "I found several rules: 1) shower relative to gym, 2) shower relative to swimming. "
-        "Which one do you mean?"
+        'I found several: 1) the usual time and duration of "gym", 2) the rule "shower right '
+        'after gym". Which one do you want to remove?'
     )
-    assert reply.quick_replies == ("shower relative to gym", "shower relative to swimming")
+    assert reply.quick_replies == (
+        'The usual time and duration of "gym"',
+        'The rule "shower right after gym"',
+    )
+    assert reply.choices == candidates
 
 
 # --- habits ----------------------------------------------------------------------------
@@ -608,16 +636,43 @@ def test_sequence_rule_proposal():
     assert '"shower" right after "gym"' in show({"tool": "add_event"}, created(), right_after).text
 
 
-def test_recurring_gap_proposal_asks_the_name_in_a_single_reply():
+def test_recurring_gap_proposal_is_a_yes_or_no():
     proposal = GapPatternProposal("n", "work", "after", 30)
 
     reply = show({"tool": "add_event"}, created(), proposal)
 
     assert reply.text.endswith(
-        'You often leave about 30 minutes free after "work". If you want to save it as a rule, '
-        'tell me what to call it (for example "break").'
+        'You often leave about 30 minutes free after "work": shall I save it as a rule?'
     )
-    assert (reply.quick_replies, reply.expects_reply) == (("No",), True)
+    assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
+
+
+@pytest.mark.parametrize(
+    ("proposal", "accept"),
+    [
+        (
+            EventPatternProposal("n", "gym", "18:00", 60),
+            {"trigger_title": "gym", "typical_start": "18:00", "typical_duration_minutes": 60},
+        ),
+        (
+            SequencePatternProposal("n", "shower", "gym", "after", 0),
+            {"trigger_title": "shower", "related_title": "gym", "position": "after"},
+        ),
+        (
+            GapPatternProposal("n", "work", "after", 30),
+            {
+                "trigger_title": "free time",
+                "related_title": "work",
+                "position": "after",
+                "gap_minutes": 30,
+            },
+        ),
+    ],
+)
+def test_proposal_buttons_save_the_rule_or_reject_it(proposal, accept):
+    reply = show({"tool": "add_event"}, created(), proposal)
+
+    assert reply.choices == (call(tool="add_event_rule", **accept), call(tool="dismiss_habit"))
 
 
 def test_rejection_of_a_suggestion():
@@ -650,7 +705,6 @@ def test_after_a_rejection_the_next_suggestion_is_appended():
         ("title", None, "What is the event called?"),
         ("event_description", None, "Which event do you mean?"),
         ("trigger_title", None, "Which event is it about?"),
-        ("trigger_title", "gap", "What do you want to call this free slot?"),
         ("time", None, "At what time?"),
         ("end_time", None, "Until what time?"),
         ("anchor_description", "shower", 'Relative to which event do you want to place "shower"?'),
@@ -759,10 +813,12 @@ def test_event_not_found_by_time_quotes_the_time():
     assert reply.text == "I can't find any event at 18:00 in the schedule today."
 
 
-def test_a_no_after_a_question_is_a_plain_ok():
+def test_a_no_after_a_question_says_nothing_changed():
     from daily.agent.results import NoAction
 
-    assert render(NoAction(after_question=True), NOW) == Reply("Ok.")
+    assert render(NoAction(after_question=True), NOW).text.startswith(
+        "Ok, I changed nothing. If you meant something else, write the whole request"
+    )
     assert render(NoAction(), NOW).text.startswith("I didn't understand what to do")
 
 

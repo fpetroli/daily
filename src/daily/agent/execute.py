@@ -32,9 +32,15 @@ from daily.agent.schemas import (
 )
 from daily.domain.timeutil import combine_date_and_time, today_date_string
 from daily.services.context import Repositories
-from daily.services.habits import HabitProposal, dismiss_habit, next_habit_proposal
-from daily.services.relative import create_event_relative
+from daily.services.habits import (
+    HabitProposal,
+    dismiss_habit,
+    mark_proposed,
+    next_habit_proposal,
+)
+from daily.services.relative import RelativeNeedsInfo, create_event_relative
 from daily.services.rules import (
+    GAP_TITLE,
     AddEventRuleSuccess,
     add_event_rule,
     remove_event_rule,
@@ -45,6 +51,7 @@ from daily.services.schedule import (
     EventUpdated,
     check_overlap,
     create_event,
+    event_day,
     get_free_slots,
     get_schedule,
     remove_event,
@@ -54,12 +61,23 @@ from daily.services.schedule import (
 Executable = Executed | MissingField | NoAction
 
 
-def execute(repos: Repositories, call: ToolCall, *, now: datetime) -> Executable:
-    """Executes `call`. It may raise on an unexpected error: the workflow step catches it."""
+def execute(
+    repos: Repositories,
+    call: ToolCall,
+    *,
+    now: datetime,
+    shown_habit: HabitProposal | None = None,
+) -> Executable:
+    """Executes `call`. It may raise on an unexpected error: the workflow step catches it.
+
+    `shown_habit` is the habit proposal of the previous reply, the one a "no" rejects. A new
+    proposal in the result is marked as shown: its counter starts again."""
     today = today_date_string(now)
-    result = _dispatch(repos, call, today, now)
+    result = _dispatch(repos, call, today, now, shown_habit)
     if isinstance(result, Executed):
         _log_write(repos, result.outcome, now)
+        if result.habit is not None:
+            mark_proposed(repos, result.habit)
     return result
 
 
@@ -105,7 +123,13 @@ def _log_write(repos: Repositories, outcome: object, now: datetime) -> None:
             )
 
 
-def _dispatch(repos: Repositories, call: ToolCall, today: str, now: datetime) -> Executable:
+def _dispatch(
+    repos: Repositories,
+    call: ToolCall,
+    today: str,
+    now: datetime,
+    shown_habit: HabitProposal | None,
+) -> Executable:
     match call:
         case AddEventCall():
             return _add_event(repos, call, today, now)
@@ -145,17 +169,19 @@ def _dispatch(repos: Repositories, call: ToolCall, today: str, now: datetime) ->
         case AddEventRuleCall():
             return _add_event_rule(repos, call)
         case RemoveEventRuleCall():
-            if call.trigger_title is None:
+            # A single title is the event the rule is about, whichever field it is in.
+            titles = [t for t in (call.trigger_title, call.related_title) if t is not None]
+            if not titles:
                 return MissingField(call, "trigger_title")
             outcome = remove_event_rule(
                 repos,
-                trigger_title=call.trigger_title,
-                related_title=call.related_title,
+                trigger_title=titles[0],
+                related_title=titles[1] if len(titles) > 1 else None,
                 field=call.field,
             )
             return Executed(call, outcome)
         case DismissHabitCall():
-            dismissed = dismiss_habit(repos)
+            dismissed = dismiss_habit(repos, shown_habit)
             return Executed(call, HabitDismissed(dismissed), habit=next_habit_proposal(repos))
         case NoActionCall():
             return NoAction()
@@ -189,8 +215,18 @@ def _add_event_relative(
 ) -> Executable:
     if call.title is None:
         return MissingField(call, "title")
+    if call.anchor_description is None and call.position is None and call.offset_minutes is None:
+        # Nothing relative was said ("add the shower"): it is a plain addition, placed with
+        # the rules like any event without a time.
+        plain = AddEventCall(
+            tool="add_event",
+            title=call.title,
+            date=call.date,
+            duration_minutes=call.duration_minutes,
+        )
+        return _add_event(repos, plain, today, now)
     # Each missing value has its own question: the service treats them all as "more data needed".
-    for field in ("anchor_description", "position", "duration_minutes"):
+    for field in ("anchor_description", "position"):
         if getattr(call, field) is None:
             return MissingField(call, field, subject=call.title)
     outcome = create_event_relative(
@@ -204,6 +240,8 @@ def _add_event_relative(
         duration_minutes=call.duration_minutes,
         now=now,
     )
+    if isinstance(outcome, RelativeNeedsInfo):  # only the duration is left: no usual one either
+        return MissingField(call, "duration_minutes", subject=call.title)
     return Executed(call, outcome, habit=_habit_after_creation(repos, outcome))
 
 
@@ -224,16 +262,19 @@ def _update_event(
     )
     if all(change is None for change in changes):
         return MissingField(call, "change", subject=call.event_description)
-    # The day of the new time: the one said explicitly, otherwise the one the event is searched
-    # on (`event_date`, or today), never composed by the model into a single field.
-    day = call.new_date or call.event_date or today
+    event_date = call.event_date or event_day(
+        repos, description=call.event_description or "", at_time=call.event_time, today=today
+    )
+    # The day of the new time: the one said explicitly, otherwise the one the event is found
+    # on, never composed by the model into a single field.
+    day = call.new_date or event_date
     new_start = combine_date_and_time(day, call.new_time) if call.new_time else None
     new_end = combine_date_and_time(day, call.new_end_time) if call.new_end_time else None
     outcome = update_event(
         repos,
         event_description=call.event_description or "",
         default_date=today,
-        event_date=call.event_date,
+        event_date=event_date,
         event_time=call.event_time,
         new_start=new_start,
         new_end=new_end,
@@ -248,23 +289,28 @@ def _update_event(
 def _remove_event(repos: Repositories, call: RemoveEventCall, today: str) -> Executable:
     if call.event_description is None and call.event_time is None:
         return MissingField(call, "event_description")
+    event_date = call.event_date or event_day(
+        repos, description=call.event_description or "", at_time=call.event_time, today=today
+    )
     outcome = remove_event(
         repos,
         event_description=call.event_description or "",
         default_date=today,
-        event_date=call.event_date,
+        event_date=event_date,
         event_time=call.event_time,
     )
     return Executed(call, outcome)
 
 
 def _add_event_rule(repos: Repositories, call: AddEventRuleCall) -> Executable:
-    if call.trigger_title is None:
-        # A gap with no name: the system cannot invent one.
-        return MissingField(call, "trigger_title", subject="gap" if call.gap_minutes else None)
+    trigger_title = call.trigger_title
+    if trigger_title is None and call.gap_minutes and call.related_title:
+        trigger_title = GAP_TITLE  # free time around an event needs no name
+    if trigger_title is None:
+        return MissingField(call, "trigger_title")
     outcome = add_event_rule(
         repos,
-        trigger_title=call.trigger_title,
+        trigger_title=trigger_title,
         related_title=call.related_title,
         position=call.position,
         offset_minutes=call.offset_minutes,

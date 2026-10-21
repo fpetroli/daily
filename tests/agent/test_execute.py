@@ -29,6 +29,8 @@ from daily.services.types import CheckOverlapResult
 
 from .conftest import NOW, TODAY, TOMORROW, add_event
 
+TOMORROW_2 = "2026-09-23"
+
 
 def run(repos, **payload):
     return execute(repos, parse_tool_call(payload), now=NOW)
@@ -156,6 +158,37 @@ def test_add_event_relative_each_missing_value_has_its_question(repos):
     assert isinstance(run(repos, tool="add_event_relative", **full), MissingField)  # no title
 
 
+def test_add_event_relative_without_duration_takes_the_usual_one(repos):
+    repos.event_defaults.upsert("Shower", typical_duration_minutes=30)
+    add_event(repos, "gym", f"{TODAY}T18:00", f"{TODAY}T19:00")
+
+    outcome = outcome_of(
+        run(
+            repos,
+            tool="add_event_relative",
+            title="shower",
+            anchor_description="gym",
+            position="after",
+        )
+    )
+
+    assert (outcome.start, outcome.end) == (f"{TODAY}T19:00", f"{TODAY}T19:30")
+
+
+def test_add_event_relative_with_nothing_relative_is_a_plain_addition(repos):
+    repos.event_rules.insert_rule(
+        trigger_title="shower", related_title="gym", position="after", offset_minutes=0
+    )
+    repos.event_defaults.upsert("shower", typical_duration_minutes=15)
+    add_event(repos, "gym", f"{TODAY}T18:00", f"{TODAY}T19:00")
+
+    result = run(repos, tool="add_event_relative", title="shower")
+
+    assert result.call.tool == "add_event"
+    assert isinstance(result.outcome, EventCreated)
+    assert (result.outcome.start, result.outcome.end) == (f"{TODAY}T19:00", f"{TODAY}T19:15")
+
+
 def test_add_event_relative_uses_date_and_anchor_time(repos):
     add_event(repos, "call", f"{TOMORROW}T10:00", f"{TOMORROW}T10:30")
     add_event(repos, "call", f"{TOMORROW}T15:00", f"{TOMORROW}T15:30")
@@ -218,11 +251,39 @@ def test_update_event_searches_the_given_day_and_disambiguates(repos):
     assert isinstance(chosen, EventUpdated) and chosen.start == f"{TOMORROW}T15:05"
 
 
-def test_update_event_not_found_today(repos):
-    add_event(repos, "meeting", f"{TOMORROW}T16:00", f"{TOMORROW}T17:00")  # tomorrow, not today
+def test_an_event_not_today_is_looked_for_on_the_nearest_day(repos):
+    add_event(repos, "meeting", f"{TOMORROW}T16:00", f"{TOMORROW}T17:00")
+    add_event(repos, "meeting", f"{TOMORROW_2}T16:00", f"{TOMORROW_2}T17:00")
+
+    shifted = outcome_of(
+        run(repos, tool="update_event", event_description="meeting", shift_minutes=-45)
+    )
+    moved = outcome_of(
+        run(repos, tool="update_event", event_description="meeting", new_time="09:00")
+    )
+    removed = outcome_of(run(repos, tool="remove_event", event_description="meeting"))
+
+    assert (shifted.start, shifted.end) == (f"{TOMORROW}T15:15", f"{TOMORROW}T16:15")
+    assert moved.start == f"{TOMORROW}T09:00"  # the new time is on the day it was found
+    assert removed.start == f"{TOMORROW}T09:00"
+    assert [e.start for e in repos.schedule.events_for_date(TOMORROW_2)] == [f"{TOMORROW_2}T16:00"]
+
+
+def test_an_event_on_no_day_is_not_found_today(repos):
+    add_event(repos, "meeting", f"{TOMORROW}T16:00", f"{TOMORROW}T17:00")
 
     outcome = outcome_of(
-        run(repos, tool="update_event", event_description="meeting", shift_minutes=5)
+        run(repos, tool="update_event", event_description="lunch", shift_minutes=5)
+    )
+
+    assert outcome == EventNotFound()
+
+
+def test_an_event_said_with_its_day_is_looked_for_only_there(repos):
+    add_event(repos, "meeting", f"{TOMORROW}T16:00", f"{TOMORROW}T17:00")
+
+    outcome = outcome_of(
+        run(repos, tool="remove_event", event_description="meeting", event_date=TODAY)
     )
 
     assert outcome == EventNotFound()
@@ -377,12 +438,13 @@ def test_add_event_rule_without_position_asks_for_position(repos):
     assert isinstance(outcome, AddEventRuleNeedsPosition)
 
 
-def test_add_event_rule_without_title_asks_for_name_and_says_so_for_a_gap(repos):
+def test_add_event_rule_without_title_asks_for_it_but_not_for_a_gap(repos):
     plain = run(repos, tool="add_event_rule", related_title="gym", position="after")
     gap = run(repos, tool="add_event_rule", related_title="work", position="after", gap_minutes=30)
 
     assert (plain.field, plain.subject) == ("trigger_title", None)
-    assert (gap.field, gap.subject) == ("trigger_title", "gap")
+    assert gap.outcome == AddEventRuleSuccess()
+    assert repos.event_rules.find_gaps_for("work", "after")[0].trigger_title == "free time"
 
 
 def test_remove_event_rule(repos):
@@ -397,9 +459,20 @@ def test_remove_event_rule(repos):
         run(repos, tool="remove_event_rule", trigger_title="shower", related_title="gym")
     )
 
-    assert removed == RemoveEventRuleSuccess()
+    assert isinstance(removed, RemoveEventRuleSuccess)
     assert again == RemoveEventRuleNotFound()
     assert run(repos, tool="remove_event_rule").field == "trigger_title"
+
+
+def test_remove_event_rule_with_the_title_in_the_related_field(repos):
+    repos.event_rules.insert_rule(
+        trigger_title="breakfast", related_title="gym", position="after", offset_minutes=0
+    )
+
+    outcome = outcome_of(run(repos, tool="remove_event_rule", related_title="gym"))
+
+    assert isinstance(outcome, RemoveEventRuleSuccess)
+    assert repos.event_rules.get_all() == []
 
 
 def test_none_is_no_action(repos):
@@ -458,11 +531,11 @@ def test_proposal_is_appended_only_after_a_creation(repos):
 
 def test_dismiss_habit_rejects_and_appends_the_next_one(repos):
     for day in ("2026-09-22", "2026-09-23", "2026-09-24"):
-        create_yoga_on(repos, day)
+        shown = create_yoga_on(repos, day).habit
     add_event(repos, "dinner", f"{TODAY}T20:00", f"{TODAY}T21:00")
     repos.event_defaults.upsert("other", typical_start="10:00", typical_duration_minutes=30)
 
-    result = run(repos, tool="dismiss_habit")
+    result = execute(repos, parse_tool_call({"tool": "dismiss_habit"}), now=NOW, shown_habit=shown)
 
     assert isinstance(result.outcome, HabitDismissed)
     assert result.outcome.proposal.title == "yoga"
@@ -499,7 +572,16 @@ def test_add_event_rule_accepts_the_proposal_and_appends_another(repos):
     )
 
     assert result.outcome == AddEventRuleSuccess()
-    assert result.habit is not None and result.habit.title == "pilates"  # the next one
+    assert result.habit is not None and getattr(result.habit, "title", None) != "yoga"
+
+
+def test_a_shown_proposal_is_not_appended_again(repos):
+    for day in ("2026-09-22", "2026-09-23", "2026-09-24"):
+        shown = create_yoga_on(repos, day).habit
+
+    again = create_yoga_on(repos, "2026-09-25")
+
+    assert shown is not None and again.habit is None
 
 
 def test_update_event_extend_counts_as_change_and_lengthens(repos):

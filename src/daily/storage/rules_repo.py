@@ -48,6 +48,9 @@ class EventRulesRepository:
         rows = self._conn.execute(f"SELECT * FROM event_rules WHERE {where}", args).fetchall()
         return [_to_rule(row) for row in rows]
 
+    def get_by_id(self, rule_id: str) -> EventRule | None:
+        return next(iter(self._query("rule_id = ?", (rule_id,))), None)
+
     def find_by_trigger(self, trigger_title: str) -> list[EventRule]:
         """Moment 1: the rules in which `trigger_title` is the dependent event."""
         return self._query("trigger_title = ? COLLATE NOCASE", (trigger_title,))
@@ -64,7 +67,7 @@ class EventRulesRepository:
         )
 
     def find_matching(self, trigger_title: str, related_title: str) -> list[EventRule]:
-        """Exact match for `remove_event_rule`: empty = not found, several rows = ambiguous."""
+        """The rules of the pair in this direction: empty = not found, several rows = ambiguous."""
         return self._query(
             "trigger_title = ? COLLATE NOCASE AND related_title = ? COLLATE NOCASE",
             (trigger_title, related_title),
