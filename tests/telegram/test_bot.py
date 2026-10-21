@@ -38,6 +38,7 @@ class FakeApi:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str, list | None]] = []
         self.styles: list[tuple] = []
+        self.silent: list[bool] = []
         self.edited: list[tuple[int, int, str]] = []
         self.unbuttoned: list[tuple[int, int]] = []
         self.deleted: list[tuple[int, list[int]]] = []
@@ -57,9 +58,10 @@ class FakeApi:
             raise item
         return item
 
-    async def send_message(self, chat_id, text, buttons=None, styles=()):
+    async def send_message(self, chat_id, text, buttons=None, styles=(), silent=False):
         self.sent.append((chat_id, text, buttons))
         self.styles.append(tuple(styles))
+        self.silent.append(silent)
         return {"message_id": 100 + len(self.sent)}
 
     async def edit_message_text(self, chat_id, message_id, text):
@@ -425,6 +427,149 @@ async def test_clear_that_telegram_refuses_says_so(bot, api, repos):
     await bot.handle_update(message("/clear", message_id=2))
 
     assert api.texts[-1] == f"{CLEARED}\n\n{NOT_DELETED}"
+
+
+# --- reminders -------------------------------------------------------------------------
+
+
+class Clock:
+    """A clock that moves: the seconds since the epoch, set by the test."""
+
+    def __init__(self, at: datetime) -> None:
+        self.now = at
+
+    def __call__(self) -> float:
+        return self.now.replace(tzinfo=ZoneInfo(ZONE)).timestamp()
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock(NOW)
+
+
+@pytest.fixture
+def reminding_bot(api, repos, parser, clock) -> Bot:
+    return Bot(
+        api,
+        TurnService(repos, parser),
+        repos,
+        allowed_users=frozenset({USER}),
+        timezone=ZONE,
+        clock=clock,
+    )
+
+
+async def remind_at(bot, clock, *times):
+    for at in times:
+        clock.now = datetime.fromisoformat(f"{TODAY}T{at}")
+        await bot.remind()
+
+
+async def test_before_an_event_it_is_announced_and_when_it_starts_the_day_is_sent(
+    reminding_bot, api, parser, repos, clock
+):
+    repos.schedule.insert_event(title="lesson", start=f"{TODAY}T15:00", end=f"{TODAY}T16:00")
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+    parser.then({"tool": "none"})
+    await reminding_bot.handle_update(message("hi", message_id=1))
+
+    await remind_at(reminding_bot, clock, "15:30", "15:54", "15:55", "15:55:30")
+
+    assert api.texts[-1] == "In 5 minutes\n\ngym\n16:00 → 17:00 · 1 h"
+    assert [s.style for s in api.styles[-1]] == ["bold"]
+    assert api.silent[-1] is False
+    assert api.deleted == []  # the announcement clears nothing
+
+    await remind_at(reminding_bot, clock, "15:59", "16:00", "16:00:30")
+
+    assert api.deleted == [(USER, [1, 101, 102])]  # the announcement goes too
+    assert api.texts[-1] == (
+        "Today · Monday, September 21\n\nlesson\n15:00 → 16:00 · 1 h\n\ngym\n16:00 → 17:00 · 1 h"
+    )
+    assert [s.style for s in api.styles[-1]] == ["bold", "strikethrough", "strikethrough", "bold"]
+    assert api.silent[-1] is True
+    assert len(api.sent) == 3  # the reply, the announcement, the day: no confirmation
+    assert [message_id for message_id, _ in repos.chat_messages.list_for(USER)] == [103]
+
+    parser.then({"tool": "none"})
+    await reminding_bot.handle_update(message("thanks", message_id=3))
+    assert parser.requests[-1].history == ()  # the conversation started over
+
+
+async def test_events_at_the_same_time_give_one_message_each_time(reminding_bot, api, repos, clock):
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+    repos.schedule.insert_event(title="call", start=f"{TODAY}T16:00", end=f"{TODAY}T16:30")
+
+    await remind_at(reminding_bot, clock, "15:30", "15:55", "16:01")
+
+    announcement, day = api.texts
+    assert announcement == (
+        "In 5 minutes\n\ngym\n16:00 → 17:00 · 1 h\n\ncall\n16:00 → 16:30 · 30 min"
+    )
+    assert day.startswith("Today")
+
+
+async def test_an_event_written_late_is_not_announced_but_its_start_is(
+    reminding_bot, api, repos, clock
+):
+    await remind_at(reminding_bot, clock, "15:30", "15:56")
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+    await remind_at(reminding_bot, clock, "15:57", "16:00")
+    repos.schedule.insert_event(title="call", start=f"{TODAY}T16:00", end=f"{TODAY}T16:30")
+    await remind_at(reminding_bot, clock, "16:10")
+
+    assert len(api.sent) == 1
+    assert api.texts[0].startswith("Today")
+
+
+async def test_the_announcement_follows_the_setting_and_zero_turns_it_off(
+    reminding_bot, api, repos, clock
+):
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+    repos.schedule.insert_event(title="dinner", start=f"{TODAY}T20:00", end=f"{TODAY}T21:00")
+    repos.app_settings.set_int("reminder_minutes", 1)
+
+    await remind_at(reminding_bot, clock, "15:30", "15:58", "15:59")
+    assert api.texts == ["In 1 minute\n\ngym\n16:00 → 17:00 · 1 h"]
+
+    repos.app_settings.set_int("reminder_minutes", 0)
+    await remind_at(reminding_bot, clock, "19:00", "19:59", "20:00")
+    assert len(api.sent) == 3  # gym's start and dinner's start, no announcement of dinner
+    assert all(text.startswith("Today") for text in api.texts[1:])
+
+
+async def test_an_announcement_before_midnight_is_for_the_next_day(
+    reminding_bot, api, repos, clock
+):
+    repos.schedule.insert_event(title="swim", start=f"{TOMORROW}T00:02", end=f"{TOMORROW}T01:02")
+
+    await remind_at(reminding_bot, clock, "23:50", "23:57")
+
+    assert api.texts == ["In 5 minutes\n\nswim\n00:02 → 01:02 · 1 h"]
+
+
+async def test_a_late_check_does_not_announce_what_already_started(
+    reminding_bot, api, repos, clock
+):
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+    repos.schedule.insert_event(title="call", start=f"{TODAY}T16:03", end=f"{TODAY}T16:30")
+
+    await remind_at(reminding_bot, clock, "15:30", "16:01")
+
+    day, announcement = api.texts
+    assert day.startswith("Today")
+    assert announcement == "In 2 minutes\n\ncall\n16:03 → 16:30 · 27 min"
+
+
+async def test_a_refused_clearing_still_sends_the_day(reminding_bot, api, repos, clock):
+    api.delete_error = TelegramError("deleteMessages", 400, "Bad Request")
+    repos.chat_messages.record(USER, 1, int(clock()))
+    repos.schedule.insert_event(title="gym", start=f"{TODAY}T16:00", end=f"{TODAY}T17:00")
+
+    await remind_at(reminding_bot, clock, "15:30", "16:00")
+
+    assert len(api.sent) == 1
+    assert api.texts[0].startswith("Today")
 
 
 # --- polling ---------------------------------------------------------------------------

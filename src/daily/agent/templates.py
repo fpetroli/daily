@@ -35,7 +35,7 @@ from daily.agent.schemas import (
     CheckOverlapCall,
     DismissHabitCall,
 )
-from daily.domain.models import EventDefault, EventRule
+from daily.domain.models import EventDefault, EventRule, ScheduleEvent
 from daily.domain.timeutil import add_minutes_to_iso, combine_date_and_time, minutes_between_iso
 from daily.services.habits import (
     EventPatternProposal,
@@ -632,6 +632,19 @@ def rules_reply(rules: list[EventRule], defaults: list[EventDefault]) -> Reply:
         out.add("\n\n")
         out.add(title, "bold")
         out.add("".join(f"\n{line}" for line in lines))
+    return out.reply()
+
+
+# --- reminders -------------------------------------------------------------------------
+
+
+def reminder_reply(events: list[ScheduleEvent], minutes: int) -> Reply:
+    """The events about to start: how long until they do, then their cards as in the
+    schedule."""
+    out = _StyledText()
+    out.add(f"In {minutes} minute" + ("" if minutes == 1 else "s"))
+    for event in events:
+        _card(out, ScheduleEntry(event.event_id, event.title, event.start, event.end))
     return out.reply()
 
 

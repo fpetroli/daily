@@ -41,6 +41,17 @@ async def test_send_message_with_buttons():
     }
 
 
+async def test_a_silent_message_has_no_notification():
+    api, calls = recording_api({"ok": True, "result": {"message_id": 5}})
+
+    await api.send_message(42, "Today", silent=True)
+    await api.send_message(42, "In 5 minutes")
+
+    [(_, silent), (_, loud)] = calls
+    assert silent["disable_notification"] is True
+    assert "disable_notification" not in loud
+
+
 async def test_without_buttons_no_markup_and_long_texts_are_cut():
     api, calls = recording_api({"ok": True, "result": {"message_id": 5}})
 

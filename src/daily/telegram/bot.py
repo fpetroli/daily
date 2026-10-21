@@ -9,9 +9,17 @@ The time of a turn is the sending time of the message in the configured time zon
 The bot keeps the ids of the messages of the chat, the user's and its own, so that `/clear`
 can delete those Telegram still allows (the last 48 hours) and start the conversation over.
 
-Updates are handled one at a time, in order: one user, one model, and a turn already
-serializes on its own lock. Only the buttons of the last reply act: the model reads the
-answer against the recent history, so an answer to an older question would be misread.
+The bot writes first only around an event: `reminder_minutes` before it starts it sends the
+event alone, with a notification (0 turns this off); when it starts it clears the chat as
+`/clear` does, without the confirmation, and sends the day's schedule as `/today`, where the
+events already over are struck through, silently. The check runs at the start of every
+minute against the schedule, so a moved or deleted event leaves no stale message; a moment
+that passed while the bot was off, or before the event was written, gives no message.
+
+Updates are handled one at a time, in order, and a reminder waits for the update in progress:
+one user, one model, and a turn already serializes on its own lock. Only the buttons of the
+last reply act: the model reads the answer against the recent history, so an answer to an
+older question would be misread.
 """
 
 import asyncio
@@ -29,8 +37,16 @@ import httpx
 from daily.agent.execute import execute
 from daily.agent.results import Choice, Executed, Execution
 from daily.agent.schemas import parse_tool_call
-from daily.agent.templates import Reply, Styled, render, rules_reply, undone_text
+from daily.agent.templates import (
+    Reply,
+    Styled,
+    reminder_reply,
+    render,
+    rules_reply,
+    undone_text,
+)
 from daily.agent.turn import TurnResult, TurnService
+from daily.domain.models import ScheduleEvent
 from daily.services.context import Repositories
 from daily.services.schedule import EventCreated, EventRemoved, EventUpdated
 from daily.services.undo import undo_last_action
@@ -75,10 +91,17 @@ SETTINGS = {
     "repetition_threshold": (1, 10, "", "repetitions before a habit is proposed"),
     "time_tolerance": (0, 60, " minutes", "how far two times can be and still match"),
     "duration_tolerance": (0, 60, " minutes", "how far two durations can be and still match"),
+    "reminder_minutes": (
+        0,
+        120,
+        " minutes",
+        "how long before an event I tell you it is starting; 0 is off",
+    ),
 }
 
 _TYPING_SECONDS = 4.0  # Telegram shows "typing" for about 5 s
 _RETRY_SECONDS = (1.0, 60.0)  # first and longest wait after a failed `getUpdates`
+_REMIND_DELAY = 1.0  # seconds into each minute when the reminders are checked
 _SHORT_LABEL = 12  # quick replies up to this length share a row
 # Telegram deletes only messages younger than 48 hours: one minute of margin.
 _DELETABLE_SECONDS = 48 * 3600 - 60
@@ -93,6 +116,7 @@ class Api(Protocol):
         text: str,
         buttons: list[list[Button]] | None = None,
         styles: Sequence[Styled] = (),
+        silent: bool = False,
     ) -> dict[str, Any]: ...
     async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None: ...
     async def remove_buttons(self, chat_id: int, message_id: int) -> None: ...
@@ -136,6 +160,8 @@ class Bot:
         self._clock = clock
         self._seq = 0
         self._prompt: _Prompt | None = None
+        self._lock = asyncio.Lock()  # an update and a reminder never interleave
+        self._reminded_until: datetime | None = None
 
     async def run(self) -> None:
         """Polls Telegram forever. Raises only when the token is refused."""
@@ -145,6 +171,15 @@ class Bot:
             await self._api.set_commands(COMMANDS)
         except (TelegramError, httpx.HTTPError):
             logger.warning("Could not register the command menu")
+        reminders = asyncio.ensure_future(self._remind_forever())
+        try:
+            await self._poll()
+        finally:
+            reminders.cancel()
+            with suppress(asyncio.CancelledError):
+                await reminders
+
+    async def _poll(self) -> None:
         offset: int | None = None
         wait = _RETRY_SECONDS[0]
         while True:
@@ -170,12 +205,61 @@ class Bot:
     async def handle_update(self, update: dict[str, Any]) -> None:
         """Never raises: a failed update is logged and the next one is handled."""
         try:
-            if (message := update.get("message")) is not None:
-                await self._on_message(message)
-            elif (query := update.get("callback_query")) is not None:
-                await self._on_button(query)
+            async with self._lock:
+                if (message := update.get("message")) is not None:
+                    await self._on_message(message)
+                elif (query := update.get("callback_query")) is not None:
+                    await self._on_button(query)
         except Exception:
             logger.exception("Update %s failed", update.get("update_id"))
+
+    # --- reminders -----------------------------------------------------------------
+
+    async def _remind_forever(self) -> None:
+        while True:
+            await self.remind()
+            await asyncio.sleep(60 - self._clock() % 60 + _REMIND_DELAY)
+
+    async def remind(self) -> None:
+        """One check of what fell since the previous one: the events that started clear each
+        chat and get the day, silently; then the events starting in `reminder_minutes` are
+        announced, so that the clearing does not take them away. The first check only starts
+        counting. Never raises."""
+        now = self._now(None)
+        since, self._reminded_until = self._reminded_until, now
+        if since is None or now <= since:
+            return
+        try:
+            async with self._lock:
+                started = _starting(self._repos, since, now)
+                for day in sorted({date.fromisoformat(event.start[:10]) for event in started}):
+                    for chat_id in sorted(self._allowed):  # private chat id = user id
+                        await self._start_day(chat_id, day, now)
+                minutes = self._repos.app_settings.reminder_minutes()
+                ahead = timedelta(minutes=minutes)
+                # a late check never announces an event that already started
+                soon = _starting(self._repos, max(since + ahead, now), now + ahead)
+                if minutes and soon:
+                    left = datetime.fromisoformat(soon[0].start) - now  # N, unless late
+                    reply = reminder_reply(soon, int(left.total_seconds()) // 60)
+                    for chat_id in sorted(self._allowed):
+                        await self._remind_chat(chat_id, reply)
+        except Exception:
+            logger.exception("The reminder check failed")
+
+    async def _start_day(self, chat_id: int, day: date, now: datetime) -> None:
+        try:
+            await self._wipe(chat_id)
+            reply = self._schedule(day, now)
+            await self._send(chat_id, reply.text, styles=reply.styles, silent=True)
+        except (TelegramError, httpx.HTTPError):
+            logger.warning("Could not send the day to chat %s", chat_id)
+
+    async def _remind_chat(self, chat_id: int, reply: Reply) -> None:
+        try:
+            await self._send(chat_id, reply.text, styles=reply.styles)
+        except (TelegramError, httpx.HTTPError):
+            logger.warning("Could not send the reminder to chat %s", chat_id)
 
     # --- incoming messages ---------------------------------------------------------
 
@@ -234,9 +318,10 @@ class Bot:
         text: str,
         buttons: list[list[Button]] | None = None,
         styles: Sequence[Styled] = (),
+        silent: bool = False,
     ) -> dict[str, Any]:
         """Sends a message and keeps its id, so that `/clear` can delete it."""
-        sent = await self._api.send_message(chat_id, text, buttons, styles)
+        sent = await self._api.send_message(chat_id, text, buttons, styles, silent=silent)
         self._repos.chat_messages.record(chat_id, sent["message_id"], int(self._clock()))
         return sent
 
@@ -343,8 +428,13 @@ class Bot:
         return REPORTED
 
     async def _clear(self, chat_id: int) -> str:
+        note = await self._wipe(chat_id)
+        return f"{CLEARED}\n\n{note}" if note else CLEARED
+
+    async def _wipe(self, chat_id: int) -> str:
         """Deletes the messages Telegram still lets the bot delete and starts the conversation
-        over: the model no longer reads replies the user cannot see."""
+        over: the model no longer reads replies the user cannot see. Returns what could not be
+        deleted, if anything."""
         self._prompt = None  # its message goes with the others
         await self._turn.forget()
         oldest = int(self._clock()) - _DELETABLE_SECONDS
@@ -358,7 +448,7 @@ class Bot:
             logger.warning("Could not delete the chat messages")
             note = NOT_DELETED
         self._repos.chat_messages.forget(chat_id)
-        return f"{CLEARED}\n\n{note}" if note else CLEARED
+        return note
 
     def _settings(self, args: str) -> str:
         if not args:
@@ -393,6 +483,18 @@ class Bot:
             timestamp if timestamp is not None else self._clock(), self._zone
         )
         return moment.replace(tzinfo=None, second=0, microsecond=0)
+
+
+def _starting(repos: Repositories, after: datetime, by: datetime) -> list[ScheduleEvent]:
+    """The events that start after `after` and by `by`, in order."""
+    first, last = after.isoformat(timespec="minutes"), by.isoformat(timespec="minutes")
+    days = sorted({after.date(), by.date()})
+    return [
+        event
+        for day in days
+        for event in repos.schedule.events_for_date(day.isoformat())
+        if first < event.start <= last
+    ]
 
 
 def _wrote_schedule(execution: Execution | None) -> bool:

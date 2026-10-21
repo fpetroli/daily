@@ -1,4 +1,4 @@
-"""Access to `preferences.app_settings`: detection thresholds, key-value."""
+"""Access to `preferences.app_settings`: detection thresholds and reminders, key-value."""
 
 import sqlite3
 
@@ -29,3 +29,7 @@ class AppSettingsRepository:
 
     def duration_tolerance(self) -> int:
         return self.get_int("duration_tolerance")
+
+    def reminder_minutes(self) -> int:
+        """Minutes before an event when the bot announces it: 0 is off."""
+        return self.get_int("reminder_minutes")

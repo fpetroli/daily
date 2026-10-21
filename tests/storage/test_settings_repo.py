@@ -12,6 +12,7 @@ def test_default_values_seeded(repo):
     assert repo.repetition_threshold() == 3
     assert repo.time_tolerance() == 15
     assert repo.duration_tolerance() == 10
+    assert repo.reminder_minutes() == 5
 
 
 def test_set_int_overwrites(repo):

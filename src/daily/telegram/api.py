@@ -76,7 +76,9 @@ class TelegramApi:
         text: str,
         buttons: list[list[Button]] | None = None,
         styles: Sequence[Styled] = (),
+        silent: bool = False,
     ) -> dict[str, Any]:
+        """`silent` delivers the message without sound or vibration."""
         text = text[:MAX_TEXT]
         return await self._call(
             "sendMessage",
@@ -84,6 +86,7 @@ class TelegramApi:
             text=text,
             entities=_entities(text, styles),
             reply_markup=_keyboard(buttons),
+            disable_notification=silent or None,
         )
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:
