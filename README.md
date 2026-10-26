@@ -214,6 +214,7 @@ installed or updated, for example when the model server runs elsewhere
 | `daily/domain` | Pure domain logic: models, time bands, ISO time arithmetic |
 | `daily/storage` | SQLite connection, numbered migrations applied on startup, one repository per table |
 | `daily/evals` | Eval runner, report and latency measurement |
+| `daily/datagen` | Training examples labelled by construction, for fine-tuning |
 
 ```
 python3.12 -m venv .venv
@@ -262,6 +263,27 @@ different time on every request; the eval uses a fixed time and underestimates i
 ```
 
 The `holdout` split is never used to tune the prompt.
+
+### Training examples
+
+For fine-tuning a smaller model, `daily.datagen` writes examples labelled by construction: it
+picks the values first (title, day, time, duration), says them in one of many ways and builds
+the expected tool call from the same values. Each line is a chat in the short `tuned` prompt
+shape (instructions and calendar, no examples) with the tool call as the answer. Messages
+equal to an eval case are dropped and the titles share nothing with the cases.
+
+`--dialogues` adds conversations (an answer to the bot's question, a yes or no to a
+proposal, a pick among several events): they run through the real agent with the planned
+calls, so the history the model sees holds the bot's real replies, and a conversation whose
+replies are not the expected ones is dropped.
+
+```
+.venv/bin/python -m daily.datagen --count 500 --dialogues 250 --out data/datagen/train.jsonl
+```
+
+`training/finetune-colab.ipynb` trains Qwen3.5-0.8B on these examples on Google Colab (LoRA,
+a T4 is enough): it generates them from this repository, trains, and saves a `Q4_0` GGUF to
+Google Drive. Measure it with `--prompt-style tuned`.
 
 ## Security model
 

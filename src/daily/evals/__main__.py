@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from daily.agent.prompts import PROMPT_STYLES
 from daily.config import Settings
 from daily.evals import latency
 from daily.evals.cases import Case, CaseError, load_cases
@@ -82,9 +83,9 @@ def _add_llm_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--llm-max-tokens", type=int, default=_DEFAULTS.llm_max_tokens)
     command.add_argument(
         "--prompt-style",
-        choices=["classic", "turns"],
+        choices=PROMPT_STYLES,
         default=_DEFAULTS.llm_prompt_style,
-        help="prompt shape: classic (E4B) or turns (E2B)",
+        help="prompt shape: classic (E4B), turns (E2B) or tuned (fine-tuned model)",
     )
 
 

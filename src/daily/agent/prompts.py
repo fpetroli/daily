@@ -18,13 +18,15 @@ from daily.agent.parser import Exchange, ParseRequest
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 CALENDAR_DAYS = 15
 
-PromptStyle = Literal["classic", "turns"]
-PROMPT_STYLES: tuple[PromptStyle, ...] = ("classic", "turns")
+PromptStyle = Literal["classic", "turns", "tuned"]
+PROMPT_STYLES: tuple[PromptStyle, ...] = ("classic", "turns", "tuned")
 DEFAULT_STYLE: PromptStyle = "classic"
 
 # The instructions come in two forms. 'classic' is the one tuned on E4B: the tool is chosen
 # "from the verb", in a single prose passage. 'turns' is the one tuned on E2B: a "message shape
-# → tool" list at the top, which a small model follows better.
+# → tool" list at the top, which a small model follows better. 'tuned' is 'turns' without the
+# examples, for a model fine-tuned on generated examples (`daily.datagen`): it no longer needs
+# them, and the prompt goes from ~7,000 tokens to ~2,000.
 _INTRO = """\
 You are the component that interprets the messages of a personal schedule app.
 You receive a user message (and, when available, the recent conversation) and you answer \
@@ -960,16 +962,17 @@ def build_messages(
 
     'classic' (E4B): system (instructions, calendar, examples) and the real turn.
     'turns' (E2B): system (instructions), the examples as conversation turns, the calendar
-    right before the question and the real turn.
+    right before the question and the real turn. 'tuned': the same without the examples.
     """
     if style == "classic":
         return [
             {"role": "system", "content": system_message(request.now, "classic")},
             {"role": "user", "content": user_message(request, "classic")},
         ]
+    examples = example_turns(request.now) if style == "turns" else []
     return [
         {"role": "system", "content": system_message(request.now, "turns")},
-        *example_turns(request.now),
+        *examples,
         *calendar_turn(request.now),
         {"role": "user", "content": user_message(request, "turns")},
     ]
