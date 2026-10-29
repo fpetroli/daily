@@ -13,7 +13,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from daily.agent.prompts import PROMPT_STYLES
 from daily.config import Settings
 from daily.evals import latency
 from daily.evals.cases import Case, CaseError, load_cases
@@ -38,7 +37,6 @@ async def _run_llama(
         args.llm_url,
         timeout=args.llm_timeout,
         max_tokens=args.llm_max_tokens,
-        prompt_style=args.prompt_style,
     )
     try:
         started = time.perf_counter()
@@ -61,7 +59,6 @@ async def _run_latency(args: argparse.Namespace) -> int:
         args.llm_url,
         timeout=args.llm_timeout,
         max_tokens=args.llm_max_tokens,
-        prompt_style=args.prompt_style,
     )
     start = datetime(2026, 9, 21, 15, 30)
     try:
@@ -81,12 +78,6 @@ def _add_llm_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--llm-url", default=_DEFAULTS.llm_base_url, help="llama-server, with /v1")
     command.add_argument("--llm-timeout", type=float, default=_DEFAULTS.llm_timeout_seconds)
     command.add_argument("--llm-max-tokens", type=int, default=_DEFAULTS.llm_max_tokens)
-    command.add_argument(
-        "--prompt-style",
-        choices=PROMPT_STYLES,
-        default=_DEFAULTS.llm_prompt_style,
-        help="prompt shape: classic (E4B), turns (E2B) or tuned (fine-tuned model)",
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

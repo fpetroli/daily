@@ -1,19 +1,13 @@
 from datetime import datetime
 
-import pytest
-
 from daily.agent.parser import Exchange, ParseRequest
 from daily.agent.prompts import (
     CALENDAR_DAYS,
-    DEFAULT_STYLE,
     INSTRUCTIONS,
-    PROMPT_STYLES,
     TOOL_HELP,
     build_messages,
     calendar_block,
-    examples_block,
     instructions_block,
-    system_message,
     user_message,
 )
 from daily.agent.schemas import TOOL_CALL_MODELS, TOOL_NAMES, tool_of
@@ -52,146 +46,54 @@ def test_calendar_crosses_the_month_change():
     assert "2026-10-13 Tuesday (in two weeks)" in text
 
 
-@pytest.mark.parametrize("style", PROMPT_STYLES)
-def test_prefix_is_identical_for_the_whole_day(style):
+def test_prefix_is_identical_for_the_whole_day():
     """It is the prefix the prompt cache reuses: the time must not get into it."""
-    morning = build_messages(ParseRequest("a", datetime(2026, 9, 21, 7, 5)), style)[:-1]
-    evening = build_messages(ParseRequest("b", datetime(2026, 9, 21, 23, 59)), style)[:-1]
+    morning = build_messages(ParseRequest("a", datetime(2026, 9, 21, 7, 5)))[:-1]
+    evening = build_messages(ParseRequest("b", datetime(2026, 9, 21, 23, 59)))[:-1]
 
     assert morning == evening
-    assert build_messages(ParseRequest("a", datetime(2026, 9, 22, 7, 5)), style)[:-1] != morning
+    assert build_messages(ParseRequest("a", datetime(2026, 9, 22, 7, 5)))[:-1] != morning
 
 
-@pytest.mark.parametrize("style", PROMPT_STYLES)
-def test_time_is_in_the_turn_not_in_the_prefix(style):
+def test_time_is_in_the_turn_not_in_the_prefix():
     request = ParseRequest("add yoga at 7 pm", NOW, timezone="Europe/Rome")
 
-    assert "15:30" not in "".join(m["content"] for m in build_messages(request, style)[:-1])
-    assert user_message(request, style).startswith("Current time: 15:30, Europe/Rome")
+    assert "15:30" not in "".join(m["content"] for m in build_messages(request)[:-1])
+    assert user_message(request).startswith("Current time: 15:30, Europe/Rome")
 
 
-def test_default_style_is_the_e4b_one():
-    request = ParseRequest("hi", NOW)
+def test_messages_are_instructions_calendar_and_real_turn():
+    """The shape the model is fine-tuned on: no examples in the prompt."""
+    messages = build_messages(ParseRequest("hi", NOW))
 
-    assert DEFAULT_STYLE == "classic"
-    assert build_messages(request) == build_messages(request, "classic")
-
-
-# --- 'classic' style (E4B): examples in the system message ------------------------------------
-
-
-def test_classic_is_a_system_plus_a_turn():
-    messages = build_messages(ParseRequest("hi", NOW), "classic")
-
-    assert [m["role"] for m in messages] == ["system", "user"]
-    assert messages[0]["content"] == system_message(NOW, "classic")
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert messages[0]["content"] == instructions_block()
+    assert messages[1]["content"] == calendar_block(NOW)
+    assert messages[2] == {"role": "assistant", "content": "Received."}
+    assert "User message: hi" in messages[3]["content"]
 
 
-def test_classic_instructions_calendar_and_examples_in_this_order():
-    text = system_message(NOW, "classic")
+def test_system_message_never_changes():
+    """Instructions and tools only: the calendar changes with the days, and comes later."""
+    later = build_messages(ParseRequest("hi", datetime(2026, 12, 1)))
 
-    assert text.startswith(instructions_block("classic"))
-    assert text.index("Available actions") < text.index("Calendar of the next")
-    assert text.index("Calendar of the next") < text.index("Examples (the dates are")
-
-
-def test_classic_has_the_examples_e4b_was_measured_with():
-    """22 standalone messages and 5 answers; the ones added for E2B are absent (E4B gets worse)."""
-    text = examples_block(NOW)
-
-    assert sum(1 for line in text.splitlines() if line.startswith('"')) == 22
-    assert text.count("\n→ ") == 5
-    assert "dismiss_habit" not in text and "remove_event_rule" not in text
+    assert later[0] == build_messages(ParseRequest("hi", NOW))[0]
+    assert "Calendar of the next" not in instructions_block()
 
 
-def test_classic_header_has_the_note_on_the_time():
-    """After the time the note costs about 1 s per turn, but without it E4B misses some cases."""
-    text = user_message(ParseRequest("what do I have tomorrow?", NOW), "classic")
-
-    assert text.splitlines()[0].startswith('Current time: 15:30 (only for "in an hour"')
-    assert text.splitlines()[1] == "User message: what do I have tomorrow?"
-    assert "Recent conversation" not in text
-
-
-def test_classic_with_history_the_turn_shows_last_exchange_before_message():
-    history = (Exchange("add yoga", 'What time do you want "yoga"?'),)
-
-    text = user_message(ParseRequest("at 7 pm", NOW, history=history), "classic")
-
-    assert text.splitlines()[1:] == [
-        "Recent conversation:",
-        "User: add yoga",
-        'Assistant: What time do you want "yoga"?',
-        "",
-        "User message: at 7 pm",
-    ]
-
-
-def test_classic_with_several_exchanges_shows_them_all_in_order():
-    """History always up to 3 exchanges, no longer only the last one."""
-    history = (
-        Exchange("add yoga", 'What time do you want "yoga"?'),
-        Exchange("at 7 pm", 'How long does "yoga" usually last?'),
-        Exchange("45 minutes", "Done: yoga today from 19:00 to 19:45."),
-    )
-
-    text = user_message(ParseRequest("what do I have today?", NOW, history=history), "classic")
-
-    assert text.splitlines()[1:] == [
-        "Recent conversation:",
-        "User: add yoga",
-        'Assistant: What time do you want "yoga"?',
-        "User: at 7 pm",
-        'Assistant: How long does "yoga" usually last?',
-        "User: 45 minutes",
-        "Assistant: Done: yoga today from 19:00 to 19:45.",
-        "",
-        "User message: what do I have today?",
-    ]
-
-
-# --- 'turns' style (E2B): examples as a conversation -------------------------------------------
-
-
-def test_turns_is_system_examples_calendar_and_real_turn():
-    messages = build_messages(ParseRequest("hi", NOW), "turns")
-
-    roles = [m["role"] for m in messages]
-    assert roles[0] == "system" and roles[-1] == "user"
-    assert roles[1:-1] == ["user", "assistant"] * ((len(messages) - 2) // 2)
-    assert messages[0]["content"] == system_message(NOW, "turns")
-    assert messages[-1] not in messages[1:-1]  # the real turn is not an example
-
-
-def test_turns_system_message_never_changes():
-    """Instructions and tools only: examples and calendar change with the days, and come later."""
-    assert system_message(NOW, "turns") == instructions_block("turns")
-    assert system_message(datetime(2026, 12, 1), "turns") == system_message(NOW, "turns")
-    assert "Calendar of the next" not in system_message(NOW, "turns")
-
-
-def test_turns_calendar_is_the_last_element_of_the_prefix():
-    """After ~3,000 tokens of examples a small model got dates wrong: it stays near the question."""
-    messages = build_messages(ParseRequest("hi", NOW), "turns")
-
-    assert messages[-3]["role"] == "user" and messages[-3]["content"] == calendar_block(NOW)
-    assert messages[-2] == {"role": "assistant", "content": "Received."}
-    assert "User message: hi" in messages[-1]["content"]
-
-
-def test_turns_header_is_the_time_alone():
-    """What the time is for is said by the instructions and the examples: after the time the
-    cache no longer holds, and every fixed word is paid on every message."""
-    text = user_message(ParseRequest("what do I have tomorrow?", NOW), "turns")
+def test_header_is_the_time_alone():
+    """What the time is for is said by the instructions: after the time the cache no longer
+    holds, and every fixed word is paid on every message."""
+    text = user_message(ParseRequest("what do I have tomorrow?", NOW))
 
     assert text.splitlines() == ["Current time: 15:30", "User message: what do I have tomorrow?"]
-    assert "The current time is only for" in instructions_block("turns")
+    assert "The current time is only for" in instructions_block()
 
 
-def test_turns_with_history_the_turn_shows_last_exchange_before_message():
+def test_with_history_the_turn_shows_last_exchange_before_message():
     history = (Exchange("add yoga", 'What time do you want "yoga"?'),)
 
-    text = user_message(ParseRequest("at 7 pm", NOW, history=history), "turns")
+    text = user_message(ParseRequest("at 7 pm", NOW, history=history))
 
     assert text.splitlines()[1:] == [
         "Recent conversation:",
@@ -202,7 +104,7 @@ def test_turns_with_history_the_turn_shows_last_exchange_before_message():
     ]
 
 
-def test_turns_with_several_exchanges_shows_them_all_in_order():
+def test_with_several_exchanges_shows_them_all_in_order():
     """History always up to 3 exchanges, no longer only the last one."""
     history = (
         Exchange("add yoga", 'What time do you want "yoga"?'),
@@ -210,7 +112,7 @@ def test_turns_with_several_exchanges_shows_them_all_in_order():
         Exchange("45 minutes", "Done: yoga today from 19:00 to 19:45."),
     )
 
-    text = user_message(ParseRequest("what do I have today?", NOW, history=history), "turns")
+    text = user_message(ParseRequest("what do I have today?", NOW, history=history))
 
     assert text.splitlines()[1:] == [
         "Recent conversation:",
@@ -223,13 +125,6 @@ def test_turns_with_several_exchanges_shows_them_all_in_order():
         "",
         "User message: what do I have today?",
     ]
-
-
-def test_both_instruction_forms_say_the_same_about_tools_and_fields():
-    for style in PROMPT_STYLES:
-        text = instructions_block(style)
-        for name in TOOL_NAMES:
-            assert name in text, (style, name)
 
 
 def test_every_tool_is_described_and_only_schema_tools():
@@ -265,91 +160,3 @@ def test_instructions_say_how_to_answer_every_system_question():
         "with_gap",
     ):
         assert key in INSTRUCTIONS, key
-
-
-def test_every_prompt_example_is_a_valid_tool_call():
-    from daily.agent.prompts import _example_calls, _example_conversations, _example_days
-    from daily.agent.schemas import parse_tool_call
-
-    day = _example_days(NOW)
-    calls = [call for _, call, *_ in _example_calls(day)]
-    calls += [call for _, _, call in _example_conversations(day)]
-
-    assert len(calls) >= 18
-    assert {parse_tool_call(call).tool for call in calls} == set(TOOL_NAMES)
-
-
-def test_examples_use_the_dates_of_todays_calendar():
-    from daily.agent.prompts import example_turns
-
-    text = "\n".join(turn["content"] for turn in example_turns(NOW))
-
-    assert '"date":"2026-09-22"' in text  # tomorrow
-    assert '"date":"2026-09-26","time":"10:30"' in text  # the first Saturday after today
-    assert example_turns(datetime(2026, 9, 22, 8, 0)) != example_turns(NOW)  # from the calendar
-
-
-def test_examples_have_the_real_turn_shape_and_do_not_use_current_time():
-    """A small model copies the header's time into `start` or `event_time`: the examples show a
-    different time on every turn and an answer that does not contain it."""
-    from daily.agent.prompts import EXAMPLE_CLOCKS, example_turns
-
-    turns = example_turns(NOW)
-    users, answers = turns[0::2], turns[1::2]
-
-    assert all(u["content"].startswith("Current time: ") for u in users)
-    assert len({u["content"].splitlines()[0] for u in users}) > 1
-    assert len(EXAMPLE_CLOCKS) > 1 and "15:30" not in EXAMPLE_CLOCKS
-    for user, answer in zip(users, answers, strict=True):
-        clock = user["content"].split()[2]  # "Current time: HH:MM"
-        assert clock not in answer["content"], (clock, answer["content"])
-
-
-def _example_messages() -> list[str]:
-    """The sentences the examples put in the user's mouth: standalone messages, requests of the
-    previous exchange and answers. One- or two-word answers ("yes", "yes thanks", "the first")
-    are common to every conversation and cannot be avoided: the exchanges are what counts."""
-    from daily.agent.prompts import _example_calls, _example_conversations, _example_days
-
-    day = _example_days(NOW)
-    messages = [m for m, *_ in _example_calls(day)]
-    for exchange, answer, _ in _example_conversations(day):
-        messages += [user for user, _ in exchange]
-        if len(answer.split()) > 2:
-            messages.append(answer)
-    return messages
-
-
-def test_examples_do_not_repeat_eval_case_messages():
-    """Copying the cases' sentences would skew the measurement: the examples are other sentences."""
-    from pathlib import Path
-
-    from daily.evals.cases import load_cases
-
-    cases = load_cases(Path(__file__).resolve().parents[2] / "evals" / "cases")
-    said = {t.say.strip().casefold() for c in cases for t in c.turns}
-
-    assert {m.strip().casefold() for m in _example_messages()} & said == set()
-
-
-def test_examples_are_not_near_copies_of_case_messages():
-    """A sentence with one word changed rewards copying more than an identical one. The limit
-    catches near-copies, not sentences with the same structure ("add X after Y"): those
-    stay, and that is why the `dev` and `holdout` cases do not prove generalization to new
-    sentences."""
-    import re
-    from difflib import SequenceMatcher
-    from pathlib import Path
-
-    from daily.evals.cases import load_cases
-
-    def words(text: str) -> list[str]:
-        return re.findall(r"\w+", text.casefold())
-
-    cases = load_cases(Path(__file__).resolve().parents[2] / "evals" / "cases")
-    said = [(c.id, t.say) for c in cases for t in c.turns]
-
-    for example in _example_messages():
-        for case_id, message in said:
-            ratio = SequenceMatcher(None, words(example), words(message)).ratio()
-            assert ratio < 0.7, f"'{example}' is almost the same as '{message}' ({case_id})"

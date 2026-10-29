@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from daily.agent.prompts import _example_calls, _example_conversations, _example_days
 from daily.agent.schemas import parse_tool_call, tool_call_json_schema
 from daily.evals.cases import load_cases
 from daily.llm.grammar import compact_grammar, integer_regex, regex_to_gbnf
@@ -75,18 +74,6 @@ def test_accepts_every_tool_call_expected_by_eval_cases(follow_up):
     assert len(calls) > 200
     for call in calls:
         assert follow_up.accepts(compact(call)), compact(call)
-
-
-def test_accepts_prompt_examples_in_key_order(single, follow_up):
-    """If an example had its keys in another order, it would teach the model a shape the grammar
-    then rejects."""
-    day = _example_days(NOW)
-    for _, call, *_ in _example_calls(day):
-        text = json.dumps(call, ensure_ascii=False, separators=(",", ":"))
-        assert single.accepts(text), text  # single-message examples use no answer fields
-    for _, _, call in _example_conversations(day):
-        text = json.dumps(call, ensure_ascii=False, separators=(",", ":"))
-        assert follow_up.accepts(text), text
 
 
 @pytest.mark.parametrize(

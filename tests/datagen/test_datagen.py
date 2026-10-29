@@ -8,8 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from daily.agent.parser import ParseRequest
-from daily.agent.prompts import WEEKDAYS, build_messages
+from daily.agent.prompts import WEEKDAYS
 from daily.agent.schemas import parse_tool_call
 from daily.datagen.__main__ import eval_titles, main, normalize
 from daily.datagen.dialogues import DIALOGUES, missing_event, run
@@ -176,17 +175,6 @@ def test_the_same_seed_gives_the_same_file(tmp_path):
     main([*args, "--out", str(second)])
 
     assert first.read_text() == second.read_text()
-
-
-def test_the_tuned_prompt_is_turns_without_the_examples():
-    request = ParseRequest("what do I have tomorrow?", NOW)
-    tuned = build_messages(request, "tuned")
-    turns = build_messages(request, "turns")
-
-    assert [m["role"] for m in tuned] == ["system", "user", "assistant", "user"]
-    assert tuned[0] == turns[0]
-    assert tuned[-3:] == turns[-3:]  # the calendar turn and the real message
-    assert len(turns) > len(tuned) + 20
 
 
 @pytest.fixture

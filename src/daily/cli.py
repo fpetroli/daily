@@ -85,7 +85,6 @@ async def _run(args: argparse.Namespace, repos: Repositories, now: datetime) -> 
             args.llm_url,
             timeout=defaults.llm_timeout_seconds,
             max_tokens=defaults.llm_max_tokens,
-            prompt_style=args.prompt_style or defaults.llm_prompt_style,
         )
         model_parser = llama
     try:
@@ -133,13 +132,6 @@ def main(argv: list[str] | None = None) -> int:
         "--llm-url",
         help="llama-server URL (e.g. http://127.0.0.1:8082/v1): uses the real model instead "
         "of a hand-written JSON tool call.",
-    )
-    chat.add_argument(
-        "--prompt-style",
-        choices=["classic", "turns"],
-        default=None,
-        help="prompt shape: 'classic' for E4B, 'turns' for E2B (default: the one in "
-        "Settings/DAILY_LLM_PROMPT_STYLE). Requires --llm-url.",
     )
     reports = commands.add_parser("reports", help="list the reports still to handle")
     reports.add_argument("--db", required=True, help="SQLite file")

@@ -1,7 +1,7 @@
 """Backend configuration, read from environment variables prefixed with `DAILY_`."""
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator
@@ -43,10 +43,6 @@ class Settings(BaseSettings):
         gt=0,
         description="Maximum wait for the model's answer: it must cover the cold prompt "
         "(about 150 s with the prefix not cached).",
-    )
-    llm_prompt_style: Literal["classic", "turns"] = Field(
-        default="classic",
-        description="Prompt shape: 'classic' for Gemma 4 E4B, 'turns' for E2B.",
     )
     llm_max_tokens: int = Field(
         default=160, gt=0, description="Cap on the tokens generated for one tool call."

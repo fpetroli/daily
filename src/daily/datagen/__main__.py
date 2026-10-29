@@ -1,6 +1,6 @@
 """`python -m daily.datagen --count 500 --dialogues 250 --out data/train.jsonl`.
 
-Writes one example per line: the chat in the 'tuned' prompt shape and the tool call as the
+Writes one example per line: the chat in the prompt shape and the tool call as the
 assistant's answer, compact as the model must write it. `--count` single messages, then
 `--dialogues` conversations run through the agent, one example per turn. The same `--seed`
 gives the same file.
@@ -65,7 +65,7 @@ def example(request: ParseRequest, call: dict[str, Any], source: str) -> dict[st
     answer = json.dumps(
         tool_call.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":")
     )
-    messages = build_messages(request, "tuned")
+    messages = build_messages(request)
     return {
         "messages": [*messages, {"role": "assistant", "content": answer}],
         "tool": call["tool"],

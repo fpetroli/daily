@@ -59,7 +59,6 @@ async def serve(settings: Settings) -> None:
         settings.llm_base_url,
         timeout=settings.llm_timeout_seconds,
         max_tokens=settings.llm_max_tokens,
-        prompt_style=settings.llm_prompt_style,
     )
     api = TelegramApi(settings.telegram_bot_token)
     bot = Bot(

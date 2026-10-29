@@ -21,7 +21,7 @@ import httpx
 from pydantic import ValidationError
 
 from daily.agent.parser import ParseFailure, ParseRequest
-from daily.agent.prompts import DEFAULT_STYLE, PromptStyle, build_messages
+from daily.agent.prompts import build_messages
 from daily.agent.schemas import ToolCall, parse_tool_call, tool_call_json_schema
 from daily.llm.grammar import compact_grammar
 
@@ -47,16 +47,13 @@ class LlamaServerParser:
         *,
         timeout: float = 300.0,
         max_tokens: int = 160,
-        model: str = "gemma",
-        prompt_style: PromptStyle = DEFAULT_STYLE,
+        model: str = "daily",
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """`timeout` is the read timeout: it must cover cold processing of the prompt (tens
-        of seconds with the prefix not cached); the connection has a short cap.
-        `prompt_style` is the prompt shape: 'classic' for E4B, 'turns' for E2B."""
+        of seconds with the prefix not cached); the connection has a short cap."""
         self._max_tokens = max_tokens
         self._model = model
-        self._style = prompt_style
         # Two grammars: with a pending question the answer fields are allowed.
         self._grammars = {
             follow_up: compact_grammar(tool_call_json_schema(follow_up=follow_up))
@@ -73,7 +70,7 @@ class LlamaServerParser:
         await self._client.aclose()
 
     async def warm_up(self, now: datetime) -> bool:
-        """Makes the server process the prompt prefix (instructions, calendar, examples).
+        """Makes the server process the prompt prefix (instructions and calendar).
 
         Cold, it takes tens of seconds (~30 tokens per second): better to pay them before the
         first message, at startup and on every change of day (the calendar is in the prefix).
@@ -91,7 +88,7 @@ class LlamaServerParser:
     def request_body(self, request: ParseRequest) -> dict[str, Any]:
         return {
             "model": self._model,
-            "messages": build_messages(request, self._style),
+            "messages": build_messages(request),
             "temperature": 0,
             "max_tokens": self._max_tokens,
             "stream": False,

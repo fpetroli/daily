@@ -19,9 +19,10 @@ engine itself, the evaluation harness and the operations recipe:
 - **Measured, not guessed.** An eval harness checks the *final state* of the schedule over a
   committed set of cases (dev and held-out splits, multi-turn conversations, temporal
   expressions), so two different but equivalent tool calls both count as right.
-- **Self-hosted on a CPU-only VM.** llama.cpp with Gemma 4 (E4B or E2B, Q4_0), prompt-cache-aware
-  prompt layout, MTP speculative decoding, a hardened systemd unit. The bot polls Telegram:
-  nothing listens on a public port, so it also runs at home behind a router.
+- **Self-hosted on a CPU-only VM.** llama.cpp with Qwen3.5-0.8B fine-tuned on examples
+  labelled by construction (Q4_0, about 500 MB), prompt-cache-aware prompt layout, a hardened
+  systemd unit. The bot polls Telegram: nothing listens on a public port, so it also runs at
+  home behind a router.
 
 ## How a turn works
 
@@ -48,23 +49,21 @@ Telegram  ◀──long polling──  bot  ──▶  llama-server (local model
 
 ## Results so far
 
-The assistant was first built and measured in Italian. With **Gemma 4 E4B** (Q4_0) on a
-4-core Arm VM (Ampere, Neoverse-N1, no GPU), the Italian version scored:
+With **Qwen3.5-0.8B** fine-tuned on generated examples (Q4_0) on a 2-core Arm VM (Ampere,
+no GPU):
 
-| Eval set | Correct final state | Unwanted writes |
-|---|---|---|
-| dev (163 cases, used to tune the prompt) | 156 (95.7%) | 3 (1.8%) |
-| holdout (34 cases) | 30 (88.2%) | 1 (2.9%) |
+| Eval set | Correct final state |
+|---|---|
+| dev (180 cases) | 136 (75.6%) |
+| holdout (36 cases) | 29 (80.6%) |
 
-Latency per turn with a warm cache and a changing clock, as in production: p50 4.3 s, p95
-5.7 s with MTP speculative decoding. The cold prompt (~3,900 tokens) takes about 150 s, so the
-service warms it up at startup and when the day changes.
+Unwanted writes (something extra in the schedule or among the rules): 32 of 216 cases.
+Latency per turn with a warm cache and a changing clock, as in production: p50 2.0 s, p95
+3.3 s. The model server uses about 1.3 GB of RAM.
 
-The prompt, the replies and the eval cases have since been translated to English: the numbers
-above still have to be measured again on the English version
-(`python -m daily.evals run --parser llama`). The smaller **E2B** is about twice as fast
-but less accurate; it is the target of the next step (a better prompt first, then LoRA
-fine-tuning on synthetic data).
+The target is 90% on dev, 85% on holdout and at most 3% unwanted writes: the turn log and
+`/report` collect the real sentences the model gets wrong, which become new training
+examples and eval cases.
 
 ## Repository layout
 
@@ -73,30 +72,28 @@ fine-tuning on synthetic data).
 | `src/daily/` | The Python 3.12 package: Telegram bot, Agno workflow, services, SQLite storage, eval harness (see [Development](#development)) |
 | `tests/` | The tests, one folder per package |
 | `evals/cases/` | The committed eval cases (YAML, one file per section) |
-| `ops/` | Deploy script, systemd unit, model download and launcher |
+| `ops/` | Deploy script, systemd unit and model server launcher |
+| `training/` | The Colab notebook that fine-tunes the model |
 
 ## Quick start
 
 You need a Linux or macOS machine with Python 3.12, `git`, `cmake` and a C++ compiler, about
-6 GB of free disk, 8 GB of RAM (the model server alone uses about 6 GB with E2B), and a
-Telegram account. All commands run from the repository
-root unless said otherwise.
+2 GB of free disk, 2 GB of RAM, a Google account (to train the model on Colab) and a Telegram
+account. All commands run from the repository root unless said otherwise.
 
-1. **Build the model server**, [llama.cpp](https://github.com/ggml-org/llama.cpp) (a build from
-   September 2026 or newer, for the MTP drafter):
+1. **Build the model server**, [llama.cpp](https://github.com/ggml-org/llama.cpp):
    ```
    git clone https://github.com/ggml-org/llama.cpp ../llama.cpp
    cmake -S ../llama.cpp -B ../llama.cpp/build -DCMAKE_BUILD_TYPE=Release
    cmake --build ../llama.cpp/build -j --target llama-server
    ```
-2. **Download the model** (Gemma 4 E4B, about 4.6 GB, plus its drafter; `e2b` for the smaller
-   one). The script checks every file and resumes an interrupted download:
-   ```
-   ./ops/get-model.sh e4b
-   ```
+2. **Train the model**: open `training/finetune-colab.ipynb` on Google Colab (a free T4 is
+   enough, see [Training the model](#training-the-model)) and download the GGUF it saves to
+   your Google Drive, for example into `models/`.
 3. **Start the model server** and leave it running (it listens on localhost only):
    ```
-   LLAMA_SERVER=../llama.cpp/build/bin/llama-server ./ops/llama-server.sh
+   LLAMA_SERVER=../llama.cpp/build/bin/llama-server LLAMA_MODEL=models/your-model.gguf \
+       ./ops/llama-server.sh
    ```
 4. **Create your bot** and get its token: see [Setting up the bot](#setting-up-the-bot).
 5. **Install the bot** in another terminal:
@@ -111,14 +108,12 @@ root unless said otherwise.
    DAILY_TIMEZONE=Europe/Rome
    DAILY_DATA_DIR=data
    ```
-   With the E2B model, add `DAILY_LLM_PROMPT_STYLE=turns`.
 6. **Start the bot**:
    ```
    .venv/bin/python -m daily
    ```
-   It logs `Connected to Telegram as @your_bot` and starts preparing the model's prompt: on a
-   4-core CPU the first time takes 2-3 minutes, until `The model is ready.` Messages sent
-   meanwhile are answered when it is done.
+   It logs `Connected to Telegram as @your_bot` and starts preparing the model's prompt, until
+   `The model is ready.` Messages sent meanwhile are answered when it is done.
 7. **Let yourself in** with your Telegram user id (see [Setting up the bot](#setting-up-the-bot)),
    then write "gym tomorrow at 6 pm for an hour". `/help` lists the commands.
 
@@ -164,7 +159,6 @@ how the bot runs:
 | `DAILY_TELEGRAM_ALLOWED_USERS` | yes, to be served | User ids allowed to use the bot, comma-separated |
 | `DAILY_TIMEZONE` | no | Your time zone, for example `Europe/Rome` (default: the server's). Turns are dated in it |
 | `DAILY_DATA_DIR` | no | Folder of the SQLite database (default `data`) |
-| `DAILY_LLM_PROMPT_STYLE` | with E2B | `classic` (default) for E4B, `turns` for E2B |
 | `DAILY_LLM_BASE_URL` | no | The model server (default `http://127.0.0.1:8081/v1`) |
 | `DAILY_LLM_TIMEOUT_SECONDS` | no | Longest wait for the model (default 300 s: it must cover the cold prompt) |
 | `DAILY_LLM_MAX_TOKENS` | no | Cap on the tokens generated for one tool call (default 160) |
@@ -183,8 +177,8 @@ To keep it running on a Linux server with systemd, build llama.cpp (step 1 of th
 start) and, from the repository root:
 
 ```
-sudo ./ops/deploy.sh --model e4b          # or e2b
-sudoedit /etc/daily/daily.env             # token, user ids, time zone
+sudo ./ops/deploy.sh --model models/your-model.gguf
+sudoedit /etc/daily/daily.env                         # token, user ids, time zone
 sudo systemctl start daily
 ```
 
@@ -192,9 +186,8 @@ sudo systemctl start daily
 
 - **`daily-llm`**, the model server: it copies `llama-server` and its libraries from your
   llama.cpp build (`../llama.cpp/build/bin` next to the repository, or the one on the PATH;
-  `--llama-server PATH` to choose), downloads and checks the model into `/opt/daily-llm`, and
-  runs it as its own `daily-llm` user on `127.0.0.1:8081`. It also sets the bot's prompt
-  style for that model.
+  `--llama-server PATH` to choose) and the model into `/opt/daily-llm`, and runs it as its
+  own `daily-llm` user on `127.0.0.1:8081`.
 - **`daily`**, the bot: dedicated `daily` user, read-only code in `/opt/daily`, private data
   folder in `/var/lib/daily`. It creates `/etc/daily/daily.env` on the first run (later runs
   leave your settings alone) and starts the bot only once the token is there.
@@ -253,10 +246,8 @@ proves the runner and the cases consistent. With the real model (start
 .venv/bin/python -m daily.evals run --parser llama --split dev --llm-timeout 300 --llm-max-tokens 200
 ```
 
-With E2B, add `--prompt-style turns` and start the server with the E2B model and drafter
-(`LLAMA_MODEL=… LLAMA_DRAFT=… ./ops/llama-server.sh`). Latency of a turn as in production (a
-different time on every request; the eval uses a fixed time and underestimates it by about
-1 s):
+Latency of a turn as in production (a different time on every request; the eval uses a fixed
+time and underestimates it):
 
 ```
 .venv/bin/python -m daily.evals latency --llm-timeout 300
@@ -264,12 +255,12 @@ different time on every request; the eval uses a fixed time and underestimates i
 
 The `holdout` split is never used to tune the prompt.
 
-### Training examples
+### Training the model
 
-For fine-tuning a smaller model, `daily.datagen` writes examples labelled by construction: it
-picks the values first (title, day, time, duration), says them in one of many ways and builds
-the expected tool call from the same values. Each line is a chat in the short `tuned` prompt
-shape (instructions and calendar, no examples) with the tool call as the answer. Messages
+`daily.datagen` writes training examples labelled by construction: it picks the values first
+(title, day, time, duration), says them in one of many ways and builds the expected tool call
+from the same values. Each line is a chat in the prompt shape the bot sends (instructions and
+calendar, no examples) with the tool call as the answer. Messages
 equal to an eval case are dropped and the titles share nothing with the cases.
 
 `--dialogues` adds conversations (an answer to the bot's question, a yes or no to a
@@ -283,7 +274,8 @@ replies are not the expected ones is dropped.
 
 `training/finetune-colab.ipynb` trains Qwen3.5-0.8B on these examples on Google Colab (LoRA,
 a T4 is enough): it generates them from this repository, trains, and saves a `Q4_0` GGUF to
-Google Drive. Measure it with `--prompt-style tuned`.
+Google Drive. Changing the prompt shape (`daily/agent/prompts.py`) means training the model
+again.
 
 ## Security model
 
@@ -306,11 +298,12 @@ ask for a private channel.
 ## Limitations
 
 - Single user, English only, Telegram only.
-- The bot never writes first: no reminders, and no sync with other calendars.
+- The bot writes first only around an event (a reminder before it, the day's schedule and a
+  countdown when it starts); no sync with other calendars.
 - The eval cases are written by hand: real sentences are messier, and the turn log exists to
   catch the gap.
 
 ## License
 
-[MIT](LICENSE). The Gemma 4 models are distributed separately under their own license
+[MIT](LICENSE). The Qwen3.5 base model is distributed separately under its own license
 (Apache 2.0).

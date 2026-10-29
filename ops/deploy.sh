@@ -2,13 +2,13 @@
 # Installs or updates daily on a Linux server. Run it with sudo, as a regular user, from the
 # repository root:
 #
-#     sudo ./ops/deploy.sh                    # the bot only
-#     sudo ./ops/deploy.sh --model e4b        # the bot and the model server (or e2b)
+#     sudo ./ops/deploy.sh                          # the bot only
+#     sudo ./ops/deploy.sh --model path/to/model.gguf   # the bot and the model server
 #
 # With --model it also installs the model server as the daily-llm service: it copies
 # llama-server from a llama.cpp build (by default ../llama.cpp/build/bin next to the
-# repository, or the one on the PATH; --llama-server PATH to choose), downloads and checks the
-# model and sets the bot's prompt style for it.
+# repository, or the one on the PATH; --llama-server PATH to choose) and the model, the GGUF
+# fine-tuned with training/finetune-colab.ipynb.
 #
 # It is idempotent: the first run creates users, environment and configuration; later runs
 # update the code and restart the services. The bot starts once its token is in the
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: sudo $0 [--model e4b|e2b] [--llama-server PATH]" >&2
+    echo "Usage: sudo $0 [--model PATH] [--llama-server PATH]" >&2
     exit 2
 }
 
@@ -30,16 +30,19 @@ if [[ -z "$BUILDER" || "$BUILDER" == "root" ]]; then
     exit 1
 fi
 
-MODEL=""
+MODEL_SOURCE=""
 LLAMA_SERVER_BIN=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --model) MODEL="${2:-}"; shift 2 || usage ;;
+        --model) MODEL_SOURCE="${2:-}"; shift 2 || usage ;;
         --llama-server) LLAMA_SERVER_BIN="${2:-}"; shift 2 || usage ;;
         *) usage ;;
     esac
 done
-[[ -z "$MODEL" || "$MODEL" == e4b || "$MODEL" == e2b ]] || usage
+if [[ -n "$MODEL_SOURCE" && ! -f "$MODEL_SOURCE" ]]; then
+    echo "Model file not found: $MODEL_SOURCE" >&2
+    exit 1
+fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE=daily.service
@@ -53,7 +56,7 @@ LLM_USER=daily-llm
 LLM_DIR=/opt/daily-llm
 LLM_PORT=8081
 
-if [[ -n "$MODEL" ]]; then
+if [[ -n "$MODEL_SOURCE" ]]; then
     # Found before anything is installed: a missing llama-server stops the script early.
     if [[ -z "$LLAMA_SERVER_BIN" ]]; then
         for candidate in "$REPO_DIR/../llama.cpp/build/bin/llama-server" \
@@ -125,10 +128,9 @@ else
     echo "    $ENV_FILE already exists: left untouched"
 fi
 
-if [[ -n "$MODEL" ]]; then
-    VARIANT="${MODEL^^}"
-    MODEL_FILE="$LLM_DIR/models/gemma-4-$VARIANT-it-Q4_0.gguf"
-    DRAFT_FILE="$LLM_DIR/models/mtp-gemma-4-$VARIANT-it-Q4_0.gguf"
+if [[ -n "$MODEL_SOURCE" ]]; then
+    VARIANT="$(basename "$MODEL_SOURCE" .gguf)"
+    MODEL_FILE="$LLM_DIR/models/$(basename "$MODEL_SOURCE")"
     echo "==> Model server ($VARIANT) in $LLM_DIR, from $LLAMA_SERVER_BIN"
     if ! id -u "$LLM_USER" >/dev/null 2>&1; then
         useradd --system --user-group --no-create-home --home-dir "$LLM_DIR" \
@@ -138,14 +140,13 @@ if [[ -n "$MODEL" ]]; then
     install -d -m 755 "$LLM_DIR/bin" "$LLM_DIR/models"
     LLAMA_BUILD="$(dirname "$(readlink -f "$LLAMA_SERVER_BIN")")"
     cp -f "$LLAMA_BUILD/llama-server" "$LLAMA_BUILD"/*.so* "$LLM_DIR/bin/"
-    "$REPO_DIR/ops/get-model.sh" "$MODEL" "$LLM_DIR/models" | grep '^==>' || true
-    [[ -f "$MODEL_FILE" && -f "$DRAFT_FILE" ]] || { echo "    model download failed" >&2; exit 1; }
+    install -m 644 "$MODEL_SOURCE" "$MODEL_FILE"
     chmod -R a+rX "$LLM_DIR"
     ! command -v restorecon >/dev/null || restorecon -R "$LLM_DIR"
 
     cat > "/etc/systemd/system/$LLM_SERVICE" <<UNIT
 [Unit]
-Description=daily - local model (llama-server, Gemma 4 $VARIANT)
+Description=daily - local model (llama-server, $VARIANT)
 Documentation=https://github.com/fpetroli/daily
 After=network.target
 
@@ -156,7 +157,7 @@ Group=$LLM_USER
 # The flags validated by the evals: see ops/llama-server.sh.
 Environment=LD_LIBRARY_PATH=$LLM_DIR/bin
 ExecStart=$LLM_DIR/bin/llama-server -m $MODEL_FILE \\
-    --spec-type draft-mtp --spec-draft-model $DRAFT_FILE \\
+    -cms 0 -b 96 -ub 96 \\
     -t $(nproc) -c 8192 -np 1 --reasoning off --reasoning-budget 0 \\
     --host 127.0.0.1 --port $LLM_PORT
 Restart=on-failure
@@ -196,7 +197,6 @@ UNIT
         exit 1
     fi
     set_env DAILY_LLM_BASE_URL "http://127.0.0.1:$LLM_PORT/v1"
-    set_env DAILY_LLM_PROMPT_STYLE "$([[ "$MODEL" == e2b ]] && echo turns || echo classic)"
     echo "    OK: $LLM_SERVICE answers; the bot's configuration points to it"
 fi
 
