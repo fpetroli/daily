@@ -260,7 +260,7 @@ async def test_the_buttons_of_a_habit_proposal_skip_the_model(bot, api, parser, 
 
     assert len(parser.requests) == 3  # the Yes did not go to the model
     assert api.edited == [(USER, 103, f"{proposal}\n\n» Yes")]
-    assert api.texts[-1] == 'Done: "yoga" usually is at 19:00 and lasts 45 minutes.'
+    assert api.texts[-1] == 'Done: "yoga" usually goes from 19:00 to 19:45 (45 min).'
     assert repos.event_defaults.get_by_title("yoga").typical_start == "19:00"
 
 

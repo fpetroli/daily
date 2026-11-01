@@ -14,6 +14,7 @@ from daily.datagen.__main__ import eval_titles, main, normalize
 from daily.datagen.dialogues import DIALOGUES, missing_event, run
 from daily.datagen.single import GENERATORS, Context
 from daily.datagen.values import (
+    LONG_TITLES,
     MONTHS,
     TITLES,
     hhmm,
@@ -23,6 +24,7 @@ from daily.datagen.values import (
     say_time,
     titles,
 )
+from daily.domain.timeutil import minutes_from_to
 from daily.evals.cases import load_cases
 
 NOW = datetime(2026, 9, 21, 15, 30)  # a Monday
@@ -134,7 +136,7 @@ def test_the_title_pool_shares_nothing_with_the_eval_cases():
 
     assert len(pool) >= 80
     assert not {title.lower() for title in pool} & used
-    assert set(pool) <= set(TITLES)
+    assert set(pool) <= set(TITLES + LONG_TITLES)
 
 
 @pytest.mark.parametrize("tool", GENERATORS)
@@ -261,3 +263,21 @@ def test_the_command_runs_the_conversations_after_the_single_messages(tmp_path, 
 
 def test_hhmm():
     assert hhmm(7 * 60 + 5) == "07:05"
+
+
+def test_a_usual_time_with_its_end_never_asks_the_model_for_minutes():
+    # "work is usually from 9 to 18": two times copied from the message, minutes counted
+    # by the code; what lasts more than four hours is a day of work or a night of sleep.
+    rng = random.Random(7)
+    seen = 0
+    for _ in range(600):
+        _, call = GENERATORS["add_event_rule"][1](Context(rng, NOW, titles(set())))
+        if "typical_end" not in call:
+            continue
+        seen += 1
+        assert "typical_duration_minutes" not in call
+        minutes = minutes_from_to(call["typical_start"], call["typical_end"])
+        assert minutes > 0
+        if minutes > 240:
+            assert call["trigger_title"] in LONG_TITLES, call
+    assert seen > 30

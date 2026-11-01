@@ -51,3 +51,8 @@ def minutes_of_day(hhmm: str) -> int:
     """Minutes since midnight of an ``HH:MM`` time."""
     hours, minutes = hhmm.split(":")
     return int(hours) * 60 + int(minutes)
+
+
+def minutes_from_to(start_hhmm: str, end_hhmm: str) -> int:
+    """Minutes from ``start_hhmm`` to the next ``end_hhmm``: "23:00" to "07:00" is 480."""
+    return (minutes_of_day(end_hhmm) - minutes_of_day(start_hhmm)) % (24 * 60)

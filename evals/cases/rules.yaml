@@ -75,7 +75,7 @@
   say: "keep in mind that yoga is at 7 pm and lasts 45 minutes"
   call: {tool: add_event_rule, trigger_title: yoga, typical_start: "19:00", typical_duration_minutes: 45}
   defaults: {yoga: ["19:00", 45]}
-  reply_has: ['Done: "yoga" usually is at 19:00 and lasts 45 minutes.']
+  reply_has: ['Done: "yoga" usually goes from 19:00 to 19:45 (45 min).']
 
 - id: rules-14
   say: "add a rule"

@@ -15,6 +15,8 @@ from typing import Any
 from daily.agent.prompts import WEEKDAYS
 from daily.datagen.values import (
     EVENT_DURATIONS,
+    LONG_DURATIONS,
+    LONG_TITLES,
     SHIFTS,
     hhmm,
     pick_time,
@@ -39,6 +41,10 @@ class Context:
 
     def title(self) -> str:
         return self.rng.choice(self.titles)
+
+    def long_title(self) -> str:
+        """A title for something that lasts most of a day or a night ("night shift")."""
+        return self.rng.choice([title for title in self.titles if title in LONG_TITLES])
 
     def two_titles(self) -> tuple[str, str]:
         first, second = self.rng.sample(self.titles, 2)
@@ -474,15 +480,21 @@ def add_event_rule(ctx: Context) -> tuple[str, Call]:
             f"I always want {say_duration(rng, minutes)} of break {position} {related}",
         ])  # fmt: skip
         return message, _put(call, related_title=related, position=position, gap_minutes=minutes)
+    if rng.random() < 0.3:
+        return _usual_range(ctx)
     title = ctx.title()
     start = pick_time(rng, 7, 21) if kind < 0.85 else None
-    duration = rng.choice(EVENT_DURATIONS) if kind >= 0.7 else None
+    duration = _usual_duration(rng, start) if kind >= 0.7 else None
+    if duration is not None and duration > 240:
+        title = ctx.long_title()
     at = say_time(rng, start) if start is not None else ""
     lasts = say_duration(rng, duration) if duration is not None else ""
     if start is not None and duration is not None:
         message = rng.choice([
             f"I always have {title} {at} and it lasts {lasts}",
             f"{title} is usually {at} for {lasts}",
+            f"{title} usually starts {at} and lasts {lasts}",
+            f"usually {title} starts {at} and lasts for {lasts}",
         ])  # fmt: skip
     elif start is not None:
         message = rng.choice([
@@ -497,6 +509,44 @@ def add_event_rule(ctx: Context) -> tuple[str, Call]:
     return message, _put(
         call, trigger_title=title, typical_start=hhmm(start) if start is not None else None,
         typical_duration_minutes=duration,
+    )  # fmt: skip
+
+
+def _usual_duration(rng: random.Random, start: int | None) -> int:
+    """Long durations only when they fit before midnight, or with no usual time at all."""
+    long = [m for m in LONG_DURATIONS if start is None or start + m <= 24 * 60]
+    return rng.choice(EVENT_DURATIONS + long)
+
+
+def _usual_range(ctx: Context) -> tuple[str, Call]:
+    """A usual time said with its end, "work is usually from 9 to 18": the model copies the
+    two times, the duration is counted by the code."""
+    rng = ctx.rng
+    if rng.random() < 0.15:  # across midnight: "sleep is from 23 to 7"
+        title = ctx.long_title()
+        start = pick_time(rng, 21, 23)
+        end = (start + rng.choice([360, 420, 480, 480, 540])) % (24 * 60)
+        span = f"from {say_clock(rng, start)} to {say_clock(rng, end)}"
+    else:
+        start = pick_time(rng, 7, 20)
+        end = min(start + _usual_duration(rng, start), 23 * 60 + 30)
+        title = ctx.long_title() if end - start > 240 else ctx.title()
+        span = say_range(rng, start, end)
+    begins, ends = say_time(rng, start), say_time(rng, end)
+    message = rng.choice([
+        f"{title} is usually {span}", f"{title} is always {span}",
+        f"{title} usually goes {span}", f"I always have {title} {span}",
+        f"{title} usually lasts {span}", f"usually {title} is {span}",
+        f"{title} usually is {span}",
+        f"{title} usually starts {begins} and ends {ends}",
+        f"{title} starts {begins} and ends {ends}",
+        f"usually {title} starts {begins} and finishes {ends}",
+        f"{title} always starts {begins} and is over {ends}",
+        f"my {title} is always {span}", f"remember that {title} is {span}",
+    ])  # fmt: skip
+    return message, _put(
+        {"tool": "add_event_rule"}, trigger_title=title, typical_start=hhmm(start),
+        typical_end=hhmm(end),
     )  # fmt: skip
 
 

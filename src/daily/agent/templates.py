@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
+from daily.agent.execute import typical_duration
 from daily.agent.parser import ParseFailure
 from daily.agent.prompts import WEEKDAYS
 from daily.agent.results import (
@@ -36,7 +37,12 @@ from daily.agent.schemas import (
     DismissHabitCall,
 )
 from daily.domain.models import EventDefault, EventRule, ScheduleEvent
-from daily.domain.timeutil import add_minutes_to_iso, combine_date_and_time, minutes_between_iso
+from daily.domain.timeutil import (
+    add_minutes_to_iso,
+    combine_date_and_time,
+    minutes_between_iso,
+    time_of_day_from_iso,
+)
 from daily.services.habits import (
     EventPatternProposal,
     GapPatternProposal,
@@ -553,12 +559,7 @@ def _free_slots_text(view: FreeSlotsView, today: date) -> str:
 def _rule_added(call: AddEventRuleCall) -> str:
     title = _q(call.trigger_title or "?")
     if call.related_title is None:
-        parts = []
-        if call.typical_start:
-            parts.append(f"is at {call.typical_start}")
-        if call.typical_duration_minutes:
-            parts.append(f"lasts {call.typical_duration_minutes} minutes")
-        return f"Done: {title} usually " + " and ".join(parts) + "."
+        return f"Done: {title} usually {_usual_time(call.typical_start, typical_duration(call))}."
     related = _q(call.related_title)
     if call.gap_minutes is not None:
         return _gap_added(call.related_title, call.position, call.gap_minutes)
@@ -569,6 +570,22 @@ def _rule_added(call: AddEventRuleCall) -> str:
         return f"Done: {title} always goes after {related}{offset}."
     offset = f", {call.offset_minutes} minutes before" if call.offset_minutes else ", right before"
     return f"Done: {title} always goes before {related}{offset}."
+
+
+def _usual_time(start: str | None, duration: int | None) -> str:
+    """A usual time as a range that can be checked at a glance: "goes from 09:00 to 18:00
+    (9 h)", never "lasts 540 minutes"."""
+    if start and duration:
+        return f"goes {_usual_range(start, duration)}"
+    if start:
+        return f"starts at {start}"
+    return f"lasts {_duration(duration or 0)}"
+
+
+def _usual_range(start: str, duration: int) -> str:
+    """ "from 09:00 to 18:00 (9 h)": the end is counted here, across midnight too."""
+    end = add_minutes_to_iso(combine_date_and_time("2000-01-01", start), duration)
+    return f"from {start} to {time_of_day_from_iso(end)} ({_duration(duration)})"
 
 
 def _gap_added(related_title: str, position: str | None, gap_minutes: int) -> str:
@@ -699,8 +716,9 @@ def _habit(habit: HabitProposal) -> Reply:
     match habit:
         case EventPatternProposal():
             return Reply(
-                f"I noticed you often do {_q(habit.title)} around {habit.typical_start} "
-                f"({habit.typical_duration_minutes} minutes): shall I save it as a usual time?",
+                f"I noticed you often do {_q(habit.title)} "
+                f"{_usual_range(habit.typical_start, habit.typical_duration_minutes)}: "
+                "shall I save it as a usual time?",
                 YES_NO,
                 expects_reply=True,
                 choices=_habit_choices(habit),
@@ -773,8 +791,10 @@ def _missing_field(missing: MissingField) -> Reply:
             return Reply("Which event is it about?", expects_reply=True)
         case "time":
             return Reply("At what time?", expects_reply=True)
-        case "end_time":
+        case "end_time" | "typical_end":
             return Reply("Until what time?", expects_reply=True)
+        case "typical_start":
+            return Reply(f"At what time does {_name(subject)} usually start?", expects_reply=True)
         case "anchor_description":
             return Reply(
                 f"Relative to which event do you want to place {_name(subject)}?",

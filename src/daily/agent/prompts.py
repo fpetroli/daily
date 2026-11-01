@@ -156,7 +156,8 @@ TOOL_HELP: dict[str, str] = {
         'shower always goes after the gym", "the meeting lasts an hour") or accepts a '
         "suggestion. Do not use it to add an event. Fields: trigger_title (the event that "
         "follows the rule), related_title (the reference event), position, offset_minutes, "
-        "gap_minutes (recurring free minutes), typical_start (HH:MM), typical_duration_minutes."
+        "gap_minutes (recurring free minutes), typical_start (HH:MM), typical_end (HH:MM, when "
+        "the user says when it ends), typical_duration_minutes."
     ),
     "remove_event_rule": "deletes a rule. Fields: trigger_title, related_title, field.",
     "dismiss_habit": "the user rejects a habit suggestion. No fields.",

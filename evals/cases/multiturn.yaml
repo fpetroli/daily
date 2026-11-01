@@ -134,8 +134,8 @@
   turns:
     - {say: "add yoga on tuesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{tue}", time: "19:00", duration_minutes: 45}}
     - {say: "add yoga on wednesday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{wed}", time: "19:00", duration_minutes: 45}}
-    - {say: "add yoga on thursday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 45}, reply_has: ['I noticed you often do "yoga" around 19:00 (45 minutes): shall I save it as a usual time?'], quick_replies: ["Yes", "No"]}
-    - {say: "yes", call: {tool: add_event_rule, trigger_title: yoga, typical_start: "19:00", typical_duration_minutes: 45}, kind: add_event_rule_success}
+    - {say: "add yoga on thursday at 7 pm for 45 minutes", call: {tool: add_event, title: yoga, date: "{thu}", time: "19:00", duration_minutes: 45}, reply_has: ['I noticed you often do "yoga" from 19:00 to 19:45 (45 min): shall I save it as a usual time?'], quick_replies: ["Yes", "No"]}
+    - {say: "yes", call: {tool: add_event_rule, trigger_title: yoga, typical_start: "19:00", typical_end: "19:45"}, kind: add_event_rule_success}
   added: [[yoga, "{tue}T19:00", "{tue}T19:45"], [yoga, "{wed}T19:00", "{wed}T19:45"], [yoga, "{thu}T19:00", "{thu}T19:45"]]
   defaults: {yoga: ["19:00", 45]}
   confirmed_patterns: 1
@@ -227,7 +227,7 @@
 
 - id: multiturn-27
   turns:
-    - {say: "work is always from 9 to 6 pm", call: {tool: add_event_rule, trigger_title: work, typical_start: "09:00", typical_duration_minutes: 540}, kind: add_event_rule_success}
+    - {say: "work is always from 9 to 6 pm", call: {tool: add_event_rule, trigger_title: work, typical_start: "09:00", typical_end: "18:00"}, kind: add_event_rule_success}
     - {say: "add work tomorrow", call: {tool: add_event, title: work, date: "{tomorrow}"}, kind: event_created}
   defaults: {work: ["09:00", 540]}
   added: [[work, "{tomorrow}T09:00", "{tomorrow}T18:00"]]

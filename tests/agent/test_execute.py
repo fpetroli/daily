@@ -1,3 +1,5 @@
+import pytest
+
 from daily.agent.execute import execute
 from daily.agent.results import (
     Executed,
@@ -428,6 +430,50 @@ def test_add_event_rule_relational_and_usual_time(repos):
 
     assert relational == AddEventRuleSuccess() == default
     assert repos.event_defaults.get_by_title("meeting").typical_start == "09:00"
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "minutes"), [("09:00", "18:00", 540), ("23:00", "07:00", 480)]
+)
+def test_add_event_rule_counts_the_usual_duration_from_start_and_end(repos, start, end, minutes):
+    # "work is from 9 to 18": the model copies the two times, the code counts the minutes.
+    outcome = outcome_of(
+        run(
+            repos, tool="add_event_rule", trigger_title="work", typical_start=start, typical_end=end
+        )
+    )
+
+    assert outcome == AddEventRuleSuccess()
+    saved = repos.event_defaults.get_by_title("work")
+    assert (saved.typical_start, saved.typical_duration_minutes) == (start, minutes)
+
+
+def test_add_event_rule_end_wins_over_a_duration_of_the_model(repos):
+    run(
+        repos,
+        tool="add_event_rule",
+        trigger_title="work",
+        typical_start="09:00",
+        typical_end="18:00",
+        typical_duration_minutes=9,
+    )
+
+    assert repos.event_defaults.get_by_title("work").typical_duration_minutes == 540
+
+
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        ({"typical_end": "18:00"}, "typical_start"),
+        ({"typical_start": "09:00", "typical_end": "09:00"}, "typical_end"),
+    ],
+)
+def test_add_event_rule_with_an_end_it_cannot_use_asks(repos, payload, field):
+    result = run(repos, tool="add_event_rule", trigger_title="work", **payload)
+
+    assert isinstance(result, MissingField)
+    assert (result.field, result.subject) == (field, "work")
+    assert repos.event_defaults.get_by_title("work") is None
 
 
 def test_add_event_rule_without_position_asks_for_position(repos):

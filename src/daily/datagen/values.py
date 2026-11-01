@@ -186,8 +186,17 @@ DURATION_WORDS: dict[int, list[str]] = {
     150: ["two and a half hours", "2 hours and 30 minutes", "150 minutes"],
     180: ["three hours", "3 hours"],
     240: ["four hours", "4 hours"],
+    300: ["five hours", "5 hours"],
+    360: ["six hours", "6 hours", "6h"],
+    420: ["seven hours", "7 hours"],
+    480: ["eight hours", "8 hours", "8h"],
+    510: ["eight and a half hours", "8 hours and 30 minutes", "8.5 hours"],
+    540: ["nine hours", "9 hours", "9h"],
+    600: ["ten hours", "10 hours"],
 }
 EVENT_DURATIONS = [15, 20, 30, 30, 45, 45, 60, 60, 60, 75, 90, 90, 120, 120, 150, 180, 240]
+# Usual times also cover a day of work or a night of sleep: "work usually lasts 9 hours".
+LONG_DURATIONS = [300, 360, 420, 480, 480, 510, 540, 540, 600]
 SHIFTS = [5, 10, 15, 15, 20, 30, 30, 45, 60, 60, 90, 120]
 
 
@@ -225,6 +234,13 @@ TITLES = [
 ]  # fmt: skip
 
 
+# What usually lasts most of a day or a night: the titles of the long usual times.
+LONG_TITLES = [
+    "office", "job", "workday", "night shift", "morning shift", "hospital shift",
+    "warehouse shift", "school", "university", "classes", "internship", "sleep",
+]  # fmt: skip
+
+
 def titles(excluded: set[str]) -> list[str]:
     """The title pool without the eval titles, nor any that contains one as a word or is
     contained in one: "dinner with Anna" goes if the cases have "dinner"."""
@@ -234,7 +250,7 @@ def titles(excluded: set[str]) -> list[str]:
         low = f" {title.lower()} "
         return any(f" {other} " in low or f" {low.strip()} " in f" {other} " for other in lowered)
 
-    return [title for title in TITLES if not clashes(title)]
+    return [title for title in TITLES + LONG_TITLES if not clashes(title)]
 
 
 def with_article(rng: random.Random, title: str, *, indefinite: bool = True) -> str:

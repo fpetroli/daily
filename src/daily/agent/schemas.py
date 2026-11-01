@@ -123,7 +123,10 @@ class CheckOverlapCall(_Call):
 
 
 class AddEventRuleCall(_Call):
-    """Stores a rule or a usual time."""
+    """Stores a rule or a usual time.
+
+    A usual time "from 9 to 18" is read as `typical_start` + `typical_end`, like `time` +
+    `end_time` in `AddEventCall`: the duration is computed by the code, never by the model."""
 
     tool: Literal["add_event_rule"]
     trigger_title: Title | None = None
@@ -132,6 +135,7 @@ class AddEventRuleCall(_Call):
     offset_minutes: Annotated[int, Field(ge=0, le=24 * 60)] | None = None
     gap_minutes: DurationMinutes | None = None
     typical_start: TimeOfDay | None = None
+    typical_end: TimeOfDay | None = None
     typical_duration_minutes: DurationMinutes | None = None
 
 

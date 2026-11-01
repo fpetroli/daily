@@ -30,7 +30,7 @@ from daily.agent.schemas import (
     ToolCall,
     UpdateEventCall,
 )
-from daily.domain.timeutil import combine_date_and_time, today_date_string
+from daily.domain.timeutil import combine_date_and_time, minutes_from_to, today_date_string
 from daily.services.context import Repositories
 from daily.services.habits import (
     HabitProposal,
@@ -308,6 +308,11 @@ def _add_event_rule(repos: Repositories, call: AddEventRuleCall) -> Executable:
         trigger_title = GAP_TITLE  # free time around an event needs no name
     if trigger_title is None:
         return MissingField(call, "trigger_title")
+    if call.typical_end is not None and call.typical_start is None:
+        return MissingField(call, "typical_start", trigger_title)
+    duration = typical_duration(call)
+    if call.typical_end is not None and duration is None:
+        return MissingField(call, "typical_end", trigger_title)  # it ends when it starts
     outcome = add_event_rule(
         repos,
         trigger_title=trigger_title,
@@ -316,10 +321,18 @@ def _add_event_rule(repos: Repositories, call: AddEventRuleCall) -> Executable:
         offset_minutes=call.offset_minutes,
         gap_minutes=call.gap_minutes,
         typical_start=call.typical_start,
-        typical_duration_minutes=call.typical_duration_minutes,
+        typical_duration_minutes=duration,
     )
     habit = next_habit_proposal(repos) if isinstance(outcome, AddEventRuleSuccess) else None
     return Executed(call, outcome, habit=habit)
+
+
+def typical_duration(call: AddEventRuleCall) -> int | None:
+    """The usual duration: from start and end when the user said when it ends ("from 9 to
+    18"), the model writes only the two times and the minutes are counted here."""
+    if call.typical_start is not None and call.typical_end is not None:
+        return minutes_from_to(call.typical_start, call.typical_end) or None
+    return call.typical_duration_minutes
 
 
 def _habit_after_creation(repos: Repositories, outcome: object) -> HabitProposal | None:

@@ -570,7 +570,7 @@ def habit(ctx: Context) -> Dialogue:
                     "tool": "add_event_rule",
                     "trigger_title": title,
                     "typical_start": hhmm(start),
-                    "typical_duration_minutes": minutes,
+                    "typical_end": hhmm(start + minutes),  # copied from "from X to Y"
                 },
             )
         )

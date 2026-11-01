@@ -555,10 +555,24 @@ def test_relational_rule_gap_and_usual_time():
     )
     assert (
         rule_added(trigger_title="meeting", typical_start="09:00", typical_duration_minutes=30)
-        == 'Done: "meeting" usually is at 09:00 and lasts 30 minutes.'
+        == 'Done: "meeting" usually goes from 09:00 to 09:30 (30 min).'
     )
     assert rule_added(trigger_title="meeting", typical_duration_minutes=30) == (
-        'Done: "meeting" usually lasts 30 minutes.'
+        'Done: "meeting" usually lasts 30 min.'
+    )
+    assert (
+        rule_added(trigger_title="work", typical_start="09:00", typical_end="18:00")
+        == 'Done: "work" usually goes from 09:00 to 18:00 (9 h).'
+    )
+    assert (
+        rule_added(trigger_title="sleep", typical_start="23:00", typical_duration_minutes=480)
+        == 'Done: "sleep" usually goes from 23:00 to 07:00 (8 h).'
+    )
+    assert rule_added(trigger_title="work", typical_start="09:00") == (
+        'Done: "work" usually starts at 09:00.'
+    )
+    assert rule_added(trigger_title="lunch", typical_duration_minutes=90) == (
+        'Done: "lunch" usually lasts 1 h 30 min.'
     )
 
 
@@ -635,8 +649,8 @@ def test_usual_time_proposal():
     reply = show({"tool": "add_event"}, created(), proposal)
 
     assert reply.text == (
-        'Done: gym tomorrow from 18:00 to 19:00. I noticed you often do "gym" around 18:00 '
-        "(60 minutes): shall I save it as a usual time?"
+        'Done: gym tomorrow from 18:00 to 19:00. I noticed you often do "gym" from 18:00 '
+        "to 19:00 (1 h): shall I save it as a usual time?"
     )
     assert (reply.quick_replies, reply.expects_reply) == (YES_NO, True)
 

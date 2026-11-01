@@ -381,13 +381,13 @@ async def test_third_time_the_usual_time_is_proposed_and_yes_saves_it(repos, par
     first, second, third = await three_yoga(turn, parser)
 
     def model(request):
-        proposal = re.search(r"around (\d{2}:\d{2}) \((\d+) minutes\)", last_reply(request))
+        proposal = re.search(r"from (\d{2}:\d{2}) to (\d{2}:\d{2})", last_reply(request))
         if request.message == "yes" and proposal:
             return {
                 "tool": "add_event_rule",
                 "trigger_title": "yoga",
                 "typical_start": proposal[1],
-                "typical_duration_minutes": int(proposal[2]),
+                "typical_end": proposal[2],
             }
         return {"tool": "none"}
 
@@ -396,9 +396,10 @@ async def test_third_time_the_usual_time_is_proposed_and_yes_saves_it(repos, par
 
     assert not first.reply.expects_reply and not second.reply.expects_reply
     assert third.reply.text.endswith(
-        'I noticed you often do "yoga" around 19:00 (45 minutes): shall I save it as a usual time?'
+        'I noticed you often do "yoga" from 19:00 to 19:45 (45 min): '
+        "shall I save it as a usual time?"
     )
-    assert accepted.reply.text == 'Done: "yoga" usually is at 19:00 and lasts 45 minutes.'
+    assert accepted.reply.text == 'Done: "yoga" usually goes from 19:00 to 19:45 (45 min).'
     assert repos.event_defaults.get_by_title("yoga").typical_start == "19:00"
     assert repos.event_patterns.list_pending() == []  # closed by itself
 
@@ -477,7 +478,7 @@ async def test_the_yes_button_saves_the_proposal_without_the_model(repos, parser
     chosen = await turn.choose(yes, "Yes", now=NOW)
 
     assert parser.requests[-1].message == "add yoga at 7 pm"  # the model was not asked
-    assert chosen.reply.text == 'Done: "yoga" usually is at 19:00 and lasts 45 minutes.'
+    assert chosen.reply.text == 'Done: "yoga" usually goes from 19:00 to 19:45 (45 min).'
     assert repos.event_patterns.list_pending() == []
     row = read_turn(repos.conn, chosen.turn_id)
     assert (row.message, row.tool, row.kind) == ("Yes", "add_event_rule", "add_event_rule_success")
