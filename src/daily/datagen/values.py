@@ -6,7 +6,9 @@ date has the current year, today is an omitted date).
 """
 
 import random
+import re
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from daily.agent.prompts import WEEKDAYS
 
@@ -181,10 +183,27 @@ DURATION_WORDS: dict[int, list[str]] = {
     50: ["50 minutes"],
     60: ["an hour", "one hour", "1 hour", "60 minutes", "1h"],
     75: ["an hour and a quarter", "75 minutes", "1 hour and 15 minutes"],
-    90: ["an hour and a half", "90 minutes", "1 hour and 30 minutes", "1.5 hours"],
+    90: [
+        "an hour and a half",
+        "90 minutes",
+        "1 hour and 30 minutes",
+        "1.5 hours",
+        "1h30",
+        "1h 30min",
+    ],
+    105: ["1 hour and 45 minutes", "1h45", "an hour and three quarters"],
     120: ["two hours", "2 hours", "2h"],
-    150: ["two and a half hours", "2 hours and 30 minutes", "150 minutes"],
+    135: ["2 hours and 15 minutes", "2h15", "2h and 15 min"],
+    150: ["two and a half hours", "2 hours and 30 minutes", "150 minutes", "2h30"],
     180: ["three hours", "3 hours"],
+    210: [
+        "3 hours and 30 minutes",
+        "3h and 30 min",
+        "3h and 30min",
+        "3h30",
+        "3.5 hours",
+        "three and a half hours",
+    ],
     240: ["four hours", "4 hours"],
     300: ["five hours", "5 hours"],
     360: ["six hours", "6 hours", "6h"],
@@ -194,7 +213,9 @@ DURATION_WORDS: dict[int, list[str]] = {
     540: ["nine hours", "9 hours", "9h"],
     600: ["ten hours", "10 hours"],
 }
-EVENT_DURATIONS = [15, 20, 30, 30, 45, 45, 60, 60, 60, 75, 90, 90, 120, 120, 150, 180, 240]
+EVENT_DURATIONS = [
+    15, 20, 30, 30, 45, 45, 60, 60, 60, 75, 90, 90, 105, 120, 120, 135, 150, 180, 210, 240,
+]  # fmt: skip
 # Usual times also cover a day of work or a night of sleep: "work usually lasts 9 hours".
 LONG_DURATIONS = [300, 360, 420, 480, 480, 510, 540, 540, 600]
 SHIFTS = [5, 10, 15, 15, 20, 30, 30, 45, 60, 60, 90, 120]
@@ -202,6 +223,54 @@ SHIFTS = [5, 10, 15, 15, 20, 30, 30, 45, 60, 60, 90, 120]
 
 def say_duration(rng: random.Random, minutes: int) -> str:
     return rng.choice(DURATION_WORDS[minutes])
+
+
+def said_durations(message: str, call: dict[str, Any]) -> dict[str, Any]:
+    """The call with every duration written as the message says it: "3h and 30 min" is
+    `*_hours` 3 and `*_minutes` 30, "90 minutes" stays `*_minutes` 90. The model copies the
+    numbers and the code counts the minutes; a value the message does not say (copied from a
+    reply of the assistant) stays in minutes."""
+    text = message.lower()
+    split = dict(call)
+    for key, value in call.items():
+        if not key.endswith("_minutes") or not isinstance(value, int):
+            continue
+        said = [
+            phrase
+            for phrase in DURATION_WORDS.get(abs(value), [])
+            if re.search(rf"(?<![\w.]){_loose(phrase)}(?!\w)", text)
+        ]
+        if not said or not re.search(r"hour|\dh", max(said, key=len)):
+            continue
+        sign = -1 if value < 0 else 1
+        hours, minutes = divmod(abs(value), 60)
+        position = list(split).index(key)
+        items = [item for item in split.items() if item[0] != key]
+        fields = [(key.removesuffix("_minutes") + "_hours", sign * hours)] if hours else []
+        fields += [(key, sign * minutes)] if minutes else []
+        split = dict(items[:position] + fields + items[position:])
+    return split
+
+
+def _loose(phrase: str) -> str:
+    """The phrase as a pattern with optional spaces: "15 min" also finds "15min"."""
+    return re.escape(phrase.lower()).replace(r"\ ", r"\s*")
+
+
+# Typos the user really writes in a command: "delite lavoro rule".
+TYPOS = {
+    "delete": ["delite", "delet", "deleet", "dlete"],
+    "remove": ["remvoe", "remov", "rmove", "romove"],
+    "cancel": ["cancle", "cancell", "cancl"],
+    "forget": ["forgt", "foget", "forgett"],
+}
+
+
+def misspell(rng: random.Random, word: str, chance: float = 0.1) -> str:
+    """The word, or now and then one of its usual typos."""
+    if word in TYPOS and rng.random() < chance:
+        return rng.choice(TYPOS[word])
+    return word
 
 
 # --- titles ------------------------------------------------------------------------------

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from daily.agent.execute import typical_duration
+from daily.agent.execute import in_minutes, typical_duration
 from daily.agent.parser import ParseFailure
 from daily.agent.prompts import WEEKDAYS
 from daily.agent.results import (
@@ -561,14 +561,14 @@ def _rule_added(call: AddEventRuleCall) -> str:
     if call.related_title is None:
         return f"Done: {title} usually {_usual_time(call.typical_start, typical_duration(call))}."
     related = _q(call.related_title)
-    if call.gap_minutes is not None:
-        return _gap_added(call.related_title, call.position, call.gap_minutes)
+    gap = in_minutes(call.gap_hours, call.gap_minutes)
+    if gap is not None:
+        return _gap_added(call.related_title, call.position, gap)
+    minutes = in_minutes(call.offset_hours, call.offset_minutes)
     if call.position == "after":
-        offset = (
-            f", {call.offset_minutes} minutes after" if call.offset_minutes else ", right after"
-        )
+        offset = f", {minutes} minutes after" if minutes else ", right after"
         return f"Done: {title} always goes after {related}{offset}."
-    offset = f", {call.offset_minutes} minutes before" if call.offset_minutes else ", right before"
+    offset = f", {minutes} minutes before" if minutes else ", right before"
     return f"Done: {title} always goes before {related}{offset}."
 
 

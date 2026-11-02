@@ -60,3 +60,7 @@ IsoMinuteOut = Annotated[
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 DurationMinutes = Annotated[int, Field(gt=0, le=24 * 60)]
 ShiftMinutes = Annotated[int, Field(ge=-7 * 24 * 60, le=7 * 24 * 60)]
+# The whole hours of a duration as the user says them ("3h and 30 min": 3): the minutes are
+# counted by the code, never by the model.
+DurationHours = Annotated[int, Field(gt=0, le=24)]
+ShiftHours = Annotated[int, Field(ge=-7 * 24, le=7 * 24)]

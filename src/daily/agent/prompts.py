@@ -50,12 +50,17 @@ remove_event_rule.
 _FIELDS_BEFORE = """\
 - Fill ONLY the fields the user said. Omit everything else: do not invent titles, times, \
 durations, time bands or other fields. If the user does not say the time, omit "time"; if they \
-say neither the end nor the duration, omit "end_time" and "duration_minutes".
-- Formats: date "YYYY-MM-DD", date and time "YYYY-MM-DDTHH:MM" (24h), time only "HH:MM", \
-durations and shifts in whole minutes.
-- Convert "tomorrow", "the day after tomorrow", "Friday", "at 6 pm", "an hour", "half an \
-hour", "in two weeks" with the calendar below: look it up, do not compute. A weekday \
-("Friday") is its first occurrence in the calendar starting from tomorrow. "tonight", \
+say neither the end nor the duration, omit "end_time", "duration_hours" and \
+"duration_minutes".
+- Formats: date "YYYY-MM-DD", date and time "YYYY-MM-DDTHH:MM" (24h), time only "HH:MM".
+- Durations and shifts: copy the numbers the user says, never convert hours into minutes. Hours \
+go in the field ending in _hours, minutes in the one ending in _minutes: "3h and 30 min" → \
+duration_hours 3 and duration_minutes 30; "9 hours" → duration_hours 9; "an hour and a half" → \
+duration_hours 1 and duration_minutes 30 (also "1.5 hours"); "90 minutes" → duration_minutes \
+90; "half an hour" → duration_minutes 30.
+- Convert "tomorrow", "the day after tomorrow", "Friday", "at 6 pm", "in two weeks" with the \
+calendar below: look it up, do not compute. A weekday ("Friday") is its first occurrence in \
+the calendar starting from tomorrow. "tonight", \
 "tomorrow morning" give the day; the time is the one the user says ("tonight at 8" is 20:00).
 - The current time is only for "in an hour" and "in half an hour": it is never the time of an \
 event nor a time band, unless the user says so.
@@ -63,9 +68,11 @@ event nor a time band, unless the user says so.
 
 _FIELDS_AFTER = """\
 - "move it by half an hour" or "postpone" → positive shift_minutes (later); only "bring \
-forward" or "move earlier" → negative. If the user says the new time ("move it to 7 pm", "make \
-it start at 16:30") use new_time (and new_date if the day changes too), not shift_minutes. \
-"lengthen by N minutes" → positive extend_minutes, "shorten" → negative.
+forward" or "move earlier" → negative (shift_hours too, if the user says hours). If the user \
+says the new time ("move it to 7 pm", "make it start at 16:30") use new_time (and new_date if \
+the day changes too), not shift_minutes. \
+"lengthen by N minutes" → positive extend_minutes (extend_hours for hours), "shorten" → \
+negative.
 - "an event", "a commitment", "an appointment" are not titles: omit "title". Day and time are \
 two independent fields, never combined into one value: "date" for the day (read from the \
 calendar; omitted is today) and "time" for the time (read from the message, unchanged). \
@@ -90,7 +97,7 @@ new_end_time. "yes" to "Shall I also delete X ...?" → remove_event with the ti
 - to "Shall I keep the gap?": yes → add_event with with_gap true, no → with_gap false.
 - to "what time is it, so I can place <event>?": the answer is the time of that event → \
 add_event of the requested event with anchor_time. To "How long does ... last?" → add_event \
-with duration_minutes.
+with duration_hours and duration_minutes.
 - to "Which one do you mean?" with several events: the answer picks one of the candidates \
 ("the second one", its title) → repeat the action of the previous request with its \
 event_description and its event_time.
@@ -119,19 +126,19 @@ TOOL_HELP: dict[str, str] = {
     "add_event": (
         "adds an event at a precise time, or with no time if the user does not say it (the app "
         "places it with the rules). Fields: title, date (the day; omitted is today), time (the "
-        "start time, if said), end_time (the end time, if said), duration_minutes (duration in "
-        "minutes, if said; it wins over end_time), anchor_time (time of the reference event, if "
-        "the user says it while answering a question), with_gap (true or false, only as an "
-        "answer to a question about the usual gap)."
+        "start time, if said), end_time (the end time, if said), duration_hours and "
+        "duration_minutes (the duration, if said; it wins over end_time), anchor_time (time of "
+        "the reference event, if the user says it while answering a question), with_gap (true "
+        "or false, only as an answer to a question about the usual gap)."
     ),
     "add_event_relative": (
         'adds an event NOW, right before or after another one already in the schedule ("add '
         'the shower after the gym"). Fields: title, anchor_description (the reference event: '
         '"after the gym" → gym), anchor_time (time of the reference event, to tell apart events '
         "with the same name), date (day of the reference event), "
-        'position ("before" or "after"), offset_minutes (only if the user says how many minutes '
-        'before or after: "10 minutes after the run"), duration_minutes (how long the new '
-        "event lasts)."
+        'position ("before" or "after"), offset_hours and offset_minutes (only if the user says '
+        'how long before or after: "10 minutes after the run"), duration_hours and '
+        "duration_minutes (how long the new event lasts)."
     ),
     "update_event": (
         "moves or changes an event ALREADY in the schedule. To find it: event_description (it "
@@ -139,25 +146,27 @@ TOOL_HELP: dict[str, str] = {
         "it is on now, only if the user says it) and event_time (the time it is at now, to tell "
         "apart events with the same name). New values: new_date (the new day, if it changes; "
         "omitted is the same day), new_time (the new start), new_end_time (the new end), "
-        "new_duration_minutes, shift_minutes (shift in minutes, negative to bring forward), "
-        'extend_minutes (minutes to add to the duration, negative to shorten: "lengthen by '
-        'half an hour"), new_title.'
+        "new_duration_hours and new_duration_minutes, shift_hours and shift_minutes (the shift, "
+        "negative to bring forward), extend_hours and extend_minutes (time to add to the "
+        'duration, negative to shorten: "lengthen by half an hour"), new_title.'
     ),
     "remove_event": (
         "deletes an event already in the schedule. Fields: event_description (it may be missing "
         'if the user only says the time: "the 6 pm event"), event_date, event_time.'
     ),
     "get_schedule": "shows the schedule of one day. Fields: date, time_band.",
-    "get_free_slots": "looks for free slots. Fields: date, min_duration_minutes, time_band.",
+    "get_free_slots": "looks for free slots. Fields: date, min_duration_hours and "
+    "min_duration_minutes (the shortest slot), time_band.",
     "check_overlap": "checks whether a time is taken. Fields: date (the day; omitted is "
     "today), time, end_time.",
     "add_event_rule": (
         'stores a rule or a habit, ONLY if the user says it always or usually holds ("the '
         'shower always goes after the gym", "the meeting lasts an hour") or accepts a '
         "suggestion. Do not use it to add an event. Fields: trigger_title (the event that "
-        "follows the rule), related_title (the reference event), position, offset_minutes, "
-        "gap_minutes (recurring free minutes), typical_start (HH:MM), typical_end (HH:MM, when "
-        "the user says when it ends), typical_duration_minutes."
+        "follows the rule), related_title (the reference event), position, offset_hours and "
+        "offset_minutes, gap_hours and gap_minutes (recurring free time), typical_start (HH:MM), "
+        "typical_end (HH:MM, when the user says when it ends), typical_duration_hours and "
+        "typical_duration_minutes."
     ),
     "remove_event_rule": "deletes a rule. Fields: trigger_title, related_title, field.",
     "dismiss_habit": "the user rejects a habit suggestion. No fields.",

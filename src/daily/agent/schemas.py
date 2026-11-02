@@ -2,8 +2,9 @@
 
 The model does **not** write text for the user and sees no internal identifiers. Every field
 is optional and must be **omitted when unknown**: a value is never invented and `null` is
-never written (fewer tokens, less latency). The model normalizes dates, times, durations and
-shifts; here only the shape is checked.
+never written (fewer tokens, less latency). The model normalizes dates and times; durations
+and shifts it copies as said, hours in `*_hours` and minutes in `*_minutes` ("3h and 30 min":
+3 and 30), and the adapters count the minutes. Here only the shape is checked.
 
 The field names are the ones tested in the early experiments: fields that find an event use
 `event_*`, new values use `new_*`, so the two meanings never get mixed up. Tool calls are
@@ -18,8 +19,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from daily.domain.timeband import TimeBand
 from daily.valuetypes import (
+    DurationHours,
     DurationMinutes,
     IsoDate,
+    ShiftHours,
     ShiftMinutes,
     TimeOfDay,
     Title,
@@ -46,6 +49,7 @@ class AddEventCall(_Call):
     date: IsoDate | None = None
     time: TimeOfDay | None = None
     end_time: TimeOfDay | None = None
+    duration_hours: DurationHours | None = None
     duration_minutes: DurationMinutes | None = None
     anchor_time: TimeOfDay | None = None
     with_gap: bool | None = None
@@ -60,7 +64,9 @@ class AddEventRelativeCall(_Call):
     anchor_time: TimeOfDay | None = None
     date: IsoDate | None = None
     position: Position | None = None
+    offset_hours: DurationHours | None = None
     offset_minutes: Annotated[int, Field(ge=0, le=24 * 60)] | None = None
+    duration_hours: DurationHours | None = None
     duration_minutes: DurationMinutes | None = None
 
 
@@ -79,8 +85,11 @@ class UpdateEventCall(_Call):
     new_date: IsoDate | None = None
     new_time: TimeOfDay | None = None
     new_end_time: TimeOfDay | None = None
+    new_duration_hours: DurationHours | None = None
     new_duration_minutes: DurationMinutes | None = None
+    shift_hours: ShiftHours | None = None
     shift_minutes: ShiftMinutes | None = None
+    extend_hours: ShiftHours | None = None
     extend_minutes: ShiftMinutes | None = None
     new_title: Title | None = None
 
@@ -107,6 +116,7 @@ class GetFreeSlotsCall(_Call):
 
     tool: Literal["get_free_slots"]
     date: IsoDate | None = None
+    min_duration_hours: DurationHours | None = None
     min_duration_minutes: DurationMinutes | None = None
     time_band: TimeBand | None = None
 
@@ -132,10 +142,13 @@ class AddEventRuleCall(_Call):
     trigger_title: Title | None = None
     related_title: Title | None = None
     position: Position | None = None
+    offset_hours: DurationHours | None = None
     offset_minutes: Annotated[int, Field(ge=0, le=24 * 60)] | None = None
+    gap_hours: DurationHours | None = None
     gap_minutes: DurationMinutes | None = None
     typical_start: TimeOfDay | None = None
     typical_end: TimeOfDay | None = None
+    typical_duration_hours: DurationHours | None = None
     typical_duration_minutes: DurationMinutes | None = None
 
 

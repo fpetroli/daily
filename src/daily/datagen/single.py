@@ -19,6 +19,7 @@ from daily.datagen.values import (
     LONG_TITLES,
     SHIFTS,
     hhmm,
+    misspell,
     pick_time,
     say_clock,
     say_day,
@@ -346,6 +347,7 @@ def remove_event(ctx: Context) -> tuple[str, Call]:
             f"the thing {say_time(rng, event_time)}",
         ])  # fmt: skip
     verb = rng.choice(["delete", "remove", "cancel", "drop", "take off", "get rid of", "clear"])
+    verb = misspell(rng, verb)
     shape = rng.random()
     if shape < 0.6:
         message = f"{verb} {target}"
@@ -504,6 +506,7 @@ def add_event_rule(ctx: Context) -> tuple[str, Call]:
     else:
         message = rng.choice([
             f"{title} always lasts {lasts}", f"{title} usually takes {lasts}",
+            f"usually {title} lasts {lasts}", f"{title} usually lasts {lasts}",
             f"remember that {title} lasts {lasts}",
         ])  # fmt: skip
     return message, _put(
@@ -564,11 +567,21 @@ def remove_event_rule(ctx: Context) -> tuple[str, Call]:
         ])  # fmt: skip
         return message, _put(call, trigger_title=trigger, related_title=related)
     title = ctx.title()
-    if kind < 0.6:
+    if kind < 0.55:
+        # "remove lavoro rule": the usual time and duration, and the rules, of one event
+        verb = misspell(rng, rng.choice(["remove", "delete", "forget"]), chance=0.25)
+        message = rng.choice([
+            f"{verb} {title} rule", f"{verb} the {title} rule", f"{verb} the rule of {title}",
+            f"there is a rule about {title}, {verb} it", f"{verb} the rules of {title}",
+        ])  # fmt: skip
+        if rng.random() < 0.3:
+            message = message[0].upper() + message[1:]
+        return message, _put(call, trigger_title=title)
+    if kind < 0.7:
         message = rng.choice([f"forget the usual time of {title}",
                               f"{title} no longer has a fixed time"])  # fmt: skip
         return message, _put(call, trigger_title=title, field="typical_start")
-    if kind < 0.8:
+    if kind < 0.85:
         message = rng.choice([f"stop remembering how long {title} lasts",
                               f"forget the duration of {title}"])  # fmt: skip
         return message, _put(call, trigger_title=title, field="typical_duration_minutes")

@@ -18,6 +18,7 @@ from daily.datagen.values import (
     MONTHS,
     TITLES,
     hhmm,
+    said_durations,
     say_absolute_date,
     say_day,
     say_range,
@@ -281,3 +282,30 @@ def test_a_usual_time_with_its_end_never_asks_the_model_for_minutes():
         if minutes > 240:
             assert call["trigger_title"] in LONG_TITLES, call
     assert seen > 30
+
+
+@pytest.mark.parametrize(
+    ("message", "call", "expected"),
+    [
+        # "3h and 30 min" is 3 and 30, never 330: the code counts the minutes.
+        (
+            "usually travel lasts 3h and 30 min",
+            {"tool": "add_event_rule", "trigger_title": "travel", "typical_duration_minutes": 210},
+            {"typical_duration_hours": 3, "typical_duration_minutes": 30},
+        ),
+        ("work lasts 9 hours", {"duration_minutes": 540}, {"duration_hours": 9}),
+        (
+            "an hour and a half",
+            {"duration_minutes": 90},
+            {"duration_hours": 1, "duration_minutes": 30},
+        ),
+        ("90 minutes", {"duration_minutes": 90}, {"duration_minutes": 90}),
+        ("half an hour", {"duration_minutes": 30}, {"duration_minutes": 30}),
+        ("bring it forward by 2 hours", {"shift_minutes": -120}, {"shift_hours": -2}),
+        ("yes", {"gap_minutes": 60}, {"gap_minutes": 60}),  # copied from the reply
+    ],
+)
+def test_a_duration_is_written_as_the_message_says_it(message, call, expected):
+    split = said_durations(message, call)
+
+    assert {k: v for k, v in split.items() if k.endswith(("_hours", "_minutes"))} == expected

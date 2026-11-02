@@ -110,6 +110,8 @@ def test_rejects_what_the_schema_does_not_allow(follow_up, text):
         '{"tool":"add_event","title":"yoga","date":"2026-09-22","time":"19:00",'
         '"duration_minutes":45}',
         '{"tool":"update_event","event_description":"call","shift_minutes":-30}',
+        '{"tool":"add_event","title":"travel","duration_hours":3,"duration_minutes":30}',
+        '{"tool":"update_event","event_description":"call","shift_hours":-1}',
         '{"tool":"get_free_slots","date":"2026-09-26","min_duration_minutes":60,"time_band":"evening"}',
         '{"tool":"add_event_rule","trigger_title":"mass","typical_start":"10:00"}',
         '{"tool":"dismiss_habit"}',

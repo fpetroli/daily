@@ -3,7 +3,8 @@
 They are the only place where language meets the domain. They do three things: check that
 no value without a fallback is missing (missing field → question), call the services with
 their parameter names and return a typed outcome. They never reinterpret a value: the model
-has already normalized dates, times and minutes, and the schema has validated them.
+has already normalized dates and times, and the schema has validated them. The only sums are
+the ones a model gets wrong: hours and minutes of a duration, start and end of a usual time.
 """
 
 from datetime import date, datetime, timedelta
@@ -149,16 +150,15 @@ def _dispatch(
             return Executed(call, ScheduleView(day, call.time_band, tuple(entries), following))
         case GetFreeSlotsCall():
             day = call.date or today
+            minimum = in_minutes(call.min_duration_hours, call.min_duration_minutes)
             slots = get_free_slots(
                 repos,
                 default_date=day,
-                min_duration_minutes=call.min_duration_minutes,
+                min_duration_minutes=minimum,
                 time_band=call.time_band,
                 now=now,
             )
-            return Executed(
-                call, FreeSlotsView(day, call.time_band, call.min_duration_minutes, tuple(slots))
-            )
+            return Executed(call, FreeSlotsView(day, call.time_band, minimum, tuple(slots)))
         case CheckOverlapCall():
             if call.time is None or call.end_time is None:
                 return MissingField(call, "time" if call.time is None else "end_time")
@@ -202,7 +202,7 @@ def _add_event(repos: Repositories, call: AddEventCall, today: str, now: datetim
         date=day,
         start=start,
         end=end,
-        duration_minutes=call.duration_minutes,
+        duration_minutes=in_minutes(call.duration_hours, call.duration_minutes),
         with_gap=call.with_gap,
         anchor_time=call.anchor_time,
         now=now,
@@ -215,13 +215,15 @@ def _add_event_relative(
 ) -> Executable:
     if call.title is None:
         return MissingField(call, "title")
-    if call.anchor_description is None and call.position is None and call.offset_minutes is None:
+    offset = in_minutes(call.offset_hours, call.offset_minutes)
+    if call.anchor_description is None and call.position is None and offset is None:
         # Nothing relative was said ("add the shower"): it is a plain addition, placed with
         # the rules like any event without a time.
         plain = AddEventCall(
             tool="add_event",
             title=call.title,
             date=call.date,
+            duration_hours=call.duration_hours,
             duration_minutes=call.duration_minutes,
         )
         return _add_event(repos, plain, today, now)
@@ -236,8 +238,8 @@ def _add_event_relative(
         anchor_description=call.anchor_description,
         anchor_time=call.anchor_time,
         position=call.position,
-        offset_minutes=call.offset_minutes,
-        duration_minutes=call.duration_minutes,
+        offset_minutes=offset,
+        duration_minutes=in_minutes(call.duration_hours, call.duration_minutes),
         now=now,
     )
     if isinstance(outcome, RelativeNeedsInfo):  # only the duration is left: no usual one either
@@ -252,14 +254,10 @@ def _update_event(
         return MissingField(call, "event_description")
     # `new_date` alone (without `new_time`) is not enough to build a new start, so it does not
     # count as a change: the same behaviour as before, when it could not be expressed.
-    changes = (
-        call.new_time,
-        call.new_end_time,
-        call.new_duration_minutes,
-        call.shift_minutes,
-        call.extend_minutes,
-        call.new_title,
-    )
+    new_duration = in_minutes(call.new_duration_hours, call.new_duration_minutes)
+    shift = in_minutes(call.shift_hours, call.shift_minutes)
+    extend = in_minutes(call.extend_hours, call.extend_minutes)
+    changes = (call.new_time, call.new_end_time, new_duration, shift, extend, call.new_title)
     if all(change is None for change in changes):
         return MissingField(call, "change", subject=call.event_description)
     event_date = call.event_date or event_day(
@@ -278,9 +276,9 @@ def _update_event(
         event_time=call.event_time,
         new_start=new_start,
         new_end=new_end,
-        new_duration_minutes=call.new_duration_minutes,
-        shift_minutes=call.shift_minutes,
-        extend_minutes=call.extend_minutes,
+        new_duration_minutes=new_duration,
+        shift_minutes=shift,
+        extend_minutes=extend,
         new_title=call.new_title,
     )
     return Executed(call, outcome)
@@ -304,7 +302,8 @@ def _remove_event(repos: Repositories, call: RemoveEventCall, today: str) -> Exe
 
 def _add_event_rule(repos: Repositories, call: AddEventRuleCall) -> Executable:
     trigger_title = call.trigger_title
-    if trigger_title is None and call.gap_minutes and call.related_title:
+    gap = in_minutes(call.gap_hours, call.gap_minutes)
+    if trigger_title is None and gap and call.related_title:
         trigger_title = GAP_TITLE  # free time around an event needs no name
     if trigger_title is None:
         return MissingField(call, "trigger_title")
@@ -318,8 +317,8 @@ def _add_event_rule(repos: Repositories, call: AddEventRuleCall) -> Executable:
         trigger_title=trigger_title,
         related_title=call.related_title,
         position=call.position,
-        offset_minutes=call.offset_minutes,
-        gap_minutes=call.gap_minutes,
+        offset_minutes=in_minutes(call.offset_hours, call.offset_minutes),
+        gap_minutes=gap,
         typical_start=call.typical_start,
         typical_duration_minutes=duration,
     )
@@ -332,7 +331,15 @@ def typical_duration(call: AddEventRuleCall) -> int | None:
     18"), the model writes only the two times and the minutes are counted here."""
     if call.typical_start is not None and call.typical_end is not None:
         return minutes_from_to(call.typical_start, call.typical_end) or None
-    return call.typical_duration_minutes
+    return in_minutes(call.typical_duration_hours, call.typical_duration_minutes)
+
+
+def in_minutes(hours: int | None, minutes: int | None) -> int | None:
+    """A duration or a shift said in hours and minutes, in minutes: "3h and 30 min" is 3 and 30
+    from the model, 210 here. Both negative for "earlier"."""
+    if hours is None and minutes is None:
+        return None
+    return (hours or 0) * 60 + (minutes or 0)
 
 
 def _habit_after_creation(repos: Repositories, outcome: object) -> HabitProposal | None:

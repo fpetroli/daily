@@ -23,7 +23,7 @@ from daily.agent.prompts import build_messages
 from daily.agent.schemas import parse_tool_call
 from daily.datagen import dialogues
 from daily.datagen.single import Context, generate
-from daily.datagen.values import titles
+from daily.datagen.values import said_durations, titles
 from daily.evals.cases import Case, load_cases
 
 _TITLE_FIELDS = (
@@ -61,7 +61,8 @@ def random_now(rng: random.Random) -> datetime:
 
 
 def example(request: ParseRequest, call: dict[str, Any], source: str) -> dict[str, Any]:
-    tool_call = parse_tool_call(call)  # raises if a generator wrote an invalid call
+    # raises if a generator wrote an invalid call
+    tool_call = parse_tool_call(said_durations(request.message, call))
     answer = json.dumps(
         tool_call.model_dump(exclude_none=True), ensure_ascii=False, separators=(",", ":")
     )

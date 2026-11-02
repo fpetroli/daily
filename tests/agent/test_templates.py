@@ -554,6 +554,10 @@ def test_relational_rule_gap_and_usual_time():
         == 'Done: after "work" I will always leave a 30-minute gap.'
     )
     assert (
+        rule_added(trigger_title="break", related_title="work", position="after", gap_hours=1)
+        == 'Done: after "work" I will always leave a 60-minute gap.'
+    )
+    assert (
         rule_added(trigger_title="meeting", typical_start="09:00", typical_duration_minutes=30)
         == 'Done: "meeting" usually goes from 09:00 to 09:30 (30 min).'
     )

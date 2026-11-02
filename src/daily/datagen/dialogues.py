@@ -29,6 +29,7 @@ from daily.datagen.values import (
     SHIFTS,
     hhmm,
     iso,
+    misspell,
     pick_time,
     say_clock,
     say_day,
@@ -580,6 +581,40 @@ def habit(ctx: Context) -> Dialogue:
     return Dialogue(turns)
 
 
+def rule_again(ctx: Context) -> Dialogue:
+    """A usual time removed and said again, as the user does: "remove work rule" then "work is
+    usually from 9 to 18". Each message has its own title, never the one of the turn before."""
+    rng = ctx.rng
+    title = ctx.long_title() if rng.random() < 0.5 else ctx.title()
+    old_start, old_minutes = pick_time(rng, 7, 12), rng.choice([60, 120, 240, 480, 540])
+    verb = misspell(rng, rng.choice(["remove", "delete"]), chance=0.3)
+    removal = rng.choice([
+        f"{verb} {title} rule", f"{verb} the {title} rule",
+        f"there is a rule about {title}, {verb} it",
+    ])  # fmt: skip
+    start = pick_time(rng, 7, 12)
+    end = start + rng.choice([60, 90, 120, 240, 480, 540])
+    again = rng.choice([f"{title} usually is {say_range(rng, start, end)}",
+                        f"{title} is usually {say_range(rng, start, end)}",
+                        f"usually {title} starts {say_time(rng, start)} and ends "
+                        f"{say_time(rng, end)}"])  # fmt: skip
+    return Dialogue(
+        [
+            Turn(removal, {"tool": "remove_event_rule", "trigger_title": title}, "removed"),
+            Turn(
+                again,
+                {
+                    "tool": "add_event_rule",
+                    "trigger_title": title,
+                    "typical_start": hhmm(start),
+                    "typical_end": hhmm(end),
+                },
+            ),
+        ],
+        defaults=[(title, hhmm(old_start), old_minutes)],
+    )
+
+
 # --- the conversation moves on ---------------------------------------------------------
 
 _NEW_REQUESTS = ("get_schedule", "get_free_slots", "check_overlap", "add_event_rule")
@@ -624,6 +659,7 @@ DIALOGUES: dict[str, tuple[float, Callable[[Context], Dialogue]]] = {
     "missing_event": (0.04, missing_event),
     "missing_change": (0.03, missing_change),
     "habit": (0.04, habit),
+    "rule_again": (0.03, rule_again),
     "ignored_question": (0.04, ignored_question),
     "plain_answer": (0.02, plain_answer),
 }

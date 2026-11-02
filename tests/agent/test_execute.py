@@ -63,6 +63,40 @@ def test_add_event_creates_the_event(repos):
     assert [e.title for e in repos.schedule.events_for_date(TOMORROW)] == ["gym"]
 
 
+def test_add_event_counts_the_minutes_of_hours_and_minutes(repos):
+    # "3h and 30 min": the model copies 3 and 30, the code counts 210 minutes.
+    outcome = outcome_of(
+        run(
+            repos,
+            tool="add_event",
+            title="travel",
+            date=TOMORROW,
+            time="08:00",
+            duration_hours=3,
+            duration_minutes=30,
+        )
+    )
+
+    assert (outcome.start, outcome.end) == (f"{TOMORROW}T08:00", f"{TOMORROW}T11:30")
+
+
+def test_update_event_shift_in_hours_and_minutes_both_negative_is_earlier(repos):
+    add_event(repos, "call", f"{TODAY}T18:00", f"{TODAY}T18:30")
+
+    outcome = outcome_of(
+        run(
+            repos,
+            tool="update_event",
+            event_description="call",
+            shift_hours=-1,
+            shift_minutes=-30,
+        )
+    )
+
+    assert isinstance(outcome, EventUpdated)
+    assert [e.start for e in repos.schedule.events_for_date(TODAY)] == [f"{TODAY}T16:30"]
+
+
 def test_add_event_without_title_asks_for_the_title(repos):
     result = run(repos, tool="add_event", date=TOMORROW, time="18:00", duration_minutes=60)
 
@@ -446,6 +480,21 @@ def test_add_event_rule_counts_the_usual_duration_from_start_and_end(repos, star
     assert outcome == AddEventRuleSuccess()
     saved = repos.event_defaults.get_by_title("work")
     assert (saved.typical_start, saved.typical_duration_minutes) == (start, minutes)
+
+
+@pytest.mark.parametrize(
+    ("hours", "minutes", "total"), [(9, None, 540), (3, 30, 210), (None, 90, 90)]
+)
+def test_add_event_rule_counts_the_minutes_of_the_usual_duration(repos, hours, minutes, total):
+    payload = {"typical_duration_hours": hours, "typical_duration_minutes": minutes}
+    run(
+        repos,
+        tool="add_event_rule",
+        trigger_title="travel",
+        **{key: value for key, value in payload.items() if value is not None},
+    )
+
+    assert repos.event_defaults.get_by_title("travel").typical_duration_minutes == total
 
 
 def test_add_event_rule_end_wins_over_a_duration_of_the_model(repos):
